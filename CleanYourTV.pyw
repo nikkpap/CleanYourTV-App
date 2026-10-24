@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.7.pyw            normal mode
-    python CleanYourTV_v1.3.7.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.8.pyw            normal mode
+    python CleanYourTV_v1.3.8.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,10 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.8  Fixes for 1.3.6/1.3.7: a backup could still go to the old Documents/CleanYourTV backups when Windows kept the
+         old folder busy; now the move copies what it cannot rename, and every start points saved folders at
+         Documents/CleanYourTV. The profile name is always the hardware's (with the device code when the model is
+         generic, e.g. "TV Box (HY44G)"), not the matched profile's.
   1.3.7  Backup → Profiles: the name is filled in from the hardware on connect (maker, brand, model, Android
          version), and follows the TV you connect to until you type your own.
   1.3.6  Everything of yours in one folder, Documents/CleanYourTV: backup, profile, themes (My theme included),
@@ -83,7 +87,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -662,11 +666,26 @@ def _merge_move(old, new):
         return
     if not new.exists():
         new.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(old), str(new))
-        return
+        try:
+            shutil.move(str(old), str(new))
+            return
+        except OSError:
+            new.mkdir(parents=True, exist_ok=True)   # moved child by child below
     for child in list(old.iterdir()):
-        if not (new / child.name).exists():
+        if (new / child.name).exists():
+            continue
+        try:
             shutil.move(str(child), str(new / child.name))
+        except OSError:   # Windows refuses a rename while something has the folder open: copy instead
+            if child.is_dir():
+                shutil.copytree(child, new / child.name)
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                shutil.copy2(child, new / child.name)
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
     try:
         old.rmdir()
     except OSError:
@@ -680,29 +699,34 @@ def migrate_documents(settings=None):
     moves = [(docs / old, home / new) for old, new in CYT_FOLDERS]
     moves.append((APPDATA / "my-theme", home / "themes" / "my-theme"))
     done = []
+    existed = [(o, n) for o, n in moves if o.exists()]
     for old, new in moves:
         if old.exists():
             try:
                 _merge_move(old, new)
-                done.append((old, new))
             except OSError as e:
-                log(f"could not move {old} to {new}: {e}", "warn")
+                log(f"could not move everything from {old} to {new}: {e}", "warn")
+            done.append((old, new))
+            if old.exists():
+                log(f"{old} still has files in use or with the same name as in {new}; they stay there", "warn")
     for sub in ("backup", "profile", "themes", "apps", "toolkit"):
         try:
             (home / sub).mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-    if settings is not None and done:
+    if settings is not None:   # every start: a setting can still point at an old folder
+        done = moves
         for k in settings.allKeys():
             v = settings.value(k)
             if not isinstance(v, str):
                 continue
             for old, new in done:
                 o = str(old)
-                if v == o or v.startswith(o + os.sep) or v.startswith(o + "/"):
-                    settings.setValue(k, str(new) + v[len(o):])
+                vv, oo = v.replace("/", os.sep).rstrip(os.sep), o.replace("/", os.sep)
+                if vv.lower() == oo.lower() or vv.lower().startswith(oo.lower() + os.sep):
+                    settings.setValue(k, str(new) + vv[len(oo):])
                     break
-    return done
+    return [(o, n) for o, n in existed if not o.exists()]
 
 
 def toolkit_archive_dir():
@@ -2359,6 +2383,9 @@ def hardware_name(info):
         if v and v.lower() not in ("unknown", "android") and v.lower() not in " ".join(parts + [model]).lower():
             parts.append(v)
     name = " ".join(parts + [model]).strip() or "TV"
+    dev = (info.get("device") or "").strip()
+    if dev and dev.lower() not in name.lower():   # a generic model ("TV Box") says little; the device code does
+        name += f" ({dev})"
     rel = (info.get("release") or "").strip()
     return f"{name} - Android {rel}" if rel else name
 
@@ -2944,8 +2971,6 @@ class BackupPage(Page):
             name = best.data(Qt.ItemDataRole.UserRole + 2)
             best.setText("✓ this TV   ·   " + best.text())
             best.setForeground(QColor(C["ok"]))
-            self.prof_name.setText(name)
-            self._auto_name = name
             self.win.matched_profile = (Path(best.data(Qt.ItemDataRole.UserRole)), name)
             self.prof_msg.set(f"Connected hardware matches your profile <b>{name}</b>; it is selected. Press "
                               "<b>Apply to TV</b> to set this box up like before.", "ok")

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.8
+
+Fixes for 1.3.6/1.3.7: a backup could still go to the old Documents/CleanYourTV backups when Windows kept the old folder busy; now the move copies what it cannot rename, and every start points saved folders at Documents/CleanYourTV. The profile name is always the hardware's (with the device code when the model is generic, e.g. "TV Box (HY44G)"), not the matched profile's.
+
 ## 1.3.7
 
 Backup → Profiles: the name is filled in from the hardware on connect (maker, brand, model, Android version, e.g. "SkyworthDigital COSMOTE HY44G - Android 14"), and follows the TV you connect to until you type your own.
