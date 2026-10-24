@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3
+
+Hold-OK menu: Uninstall, for apps you installed (not the TV's own apps); Android asks before removing.
+
 ## 1.2.2
 
 After Build & install the TV goes Home once more, so the Live TV row reads the channels with the permission just granted. Launcher report: "applied" when config.xml only carries this app's switch values. Tested: Sony Bravia (com.sony.dtv.tvx) gives the row its channels.
