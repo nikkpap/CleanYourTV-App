@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+Debloat: Report, the enabled packages by category with the tested-list count and note, ready to copy.
+
 ## 1.3.0
 
 Extras: copy apps from the TV or box to this PC (one or many, the TV's own too if you want): .apk files, or .apks for apps in parts, named <package>_<version>, md5-checked, ready for Install an app from this PC.

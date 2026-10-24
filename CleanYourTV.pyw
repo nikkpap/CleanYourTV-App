@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.0.pyw            normal mode
-    python CleanYourTV_v1.3.0.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.1.pyw            normal mode
+    python CleanYourTV_v1.3.1.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,7 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.1  Debloat: Report, the enabled packages by category with the tested-list count and note, ready to copy.
   1.3.0  Extras: copy apps from the TV or box to this PC (one or many, the TV's own too if you want): .apk files,
          or .apks for apps in parts, named <package>_<version>, md5-checked, ready for Install an app from this PC.
   1.2.9  The Live TV app is recognised on every brand the toolkit lists: Sony (tvx, tvlin), Philips, MediaTek
@@ -67,7 +68,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -1892,6 +1893,30 @@ class DPad(QWidget):
 # ----------------------------------------------------------------------------------------------
 # Package table
 # ----------------------------------------------------------------------------------------------
+def package_report_text(rows, info):
+    """The enabled packages as plain text, grouped by category, to paste in a chat and ask which can go."""
+    head = [f"CleanYourTV {APP_VERSION} · package report",
+            f"TV: {info.get('manufacturer', '')} {info.get('model', '')} ({info.get('device', '')}), Android "
+            f"{info.get('release', '')} (SDK {info.get('sdk', '')}), firmware {info.get('build', '')}",
+            f"Home: {info.get('home', '')} · Live TV app: {info.get('live_tv_app') or 'none found'}",
+            "Columns: package | lists that disable it | note. Core packages are locked and never disabled.", ""]
+    enabled = [r for r in rows if not r["disabled"]]
+    disabled = [r for r in rows if r["disabled"]]
+    out = head + [f"ENABLED: {len(enabled)} · already disabled: {len(disabled)}", ""]
+    for cat, (title, _col, _ask, _desc) in CATEGORIES.items():
+        group = sorted((r for r in enabled if r["cat"] == cat), key=lambda r: r["name"])
+        if not group:
+            continue
+        out.append(f"== {title} ({len(group)})")
+        for r in group:
+            out.append(f"{r['name']} | {r['community'] or 0} | {r['note'] or ''}".rstrip(" |"))
+        out.append("")
+    if disabled:
+        out.append(f"== Already disabled ({len(disabled)})")
+        out += sorted(r["name"] for r in disabled)
+    return "\n".join(out)
+
+
 class PackageModel(QAbstractTableModel):
     HEAD = ["", "Package", "Category", "State", "Lists", "Note"]
     checked_changed = pyqtSignal()
@@ -2987,7 +3012,9 @@ class DebloatPage(Page):
                           ("Disabled", "disabled"), ("Selected", "selected")]:
             self.state.addItem(text, key)
         self.reload = button("", None, "refresh", "Reload the package list from the TV")
-        tl.addWidget(hbox(self.search, self.cat, self.state, self.reload))
+        self.report_btn = button("Report", None, "log", "The enabled packages as text, to copy and ask about")
+        self.report_btn.clicked.connect(self.package_report)
+        tl.addWidget(hbox(self.search, self.cat, self.state, self.reload, self.report_btn))
 
         self.preset = QComboBox()
         self.preset.setMinimumWidth(320)
@@ -3099,6 +3126,27 @@ class DebloatPage(Page):
 
     def win_capture(self):
         self.win.capture()
+
+    def package_report(self):
+        rows = self.model.rows
+        if not rows:
+            self.banner.set("Connect to your TV first: the report lists its packages.", "warn")
+            return
+        text = package_report_text(rows, TV.info or {})
+        d = Dialog(self, "Package report", 860)
+        d.lay.addWidget(label("Copy this and paste it in the chat to ask which enabled packages are safe to disable "
+                              "on this TV. It holds the model and package names only: no IP, account or serial.",
+                              "Muted", wrap=True))
+        box = QPlainTextEdit(text)
+        box.setObjectName("Box")
+        box.setReadOnly(True)
+        box.setMinimumHeight(440)
+        d.lay.addWidget(box)
+        copy = button("Copy", "Primary", "save")
+        copy.clicked.connect(lambda: (QApplication.clipboard().setText(text), copy.setText("Copied ✓")))
+        d.lay.addWidget(hbox(copy, None))
+        d.buttons("Close", None, "Ghost")
+        d.exec()
 
     def on_connection(self, ok, info):
         if not ok:
