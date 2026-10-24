@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.4.pyw            normal mode
-    python CleanYourTV_v1.3.4.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.5.pyw            normal mode
+    python CleanYourTV_v1.3.5.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.5  Themes: Add themes… takes a .zip of theme folders (or one theme) into Documents/CleanYourTV themes, where
+         a toolkit update never touches them; they show first in the gallery, marked "mine", with their about.txt
+         line and preview. Folder opens that place.
   1.3.4  Faster start: the toolkit update check and download run in the background after the window opens, and the
          update is put in place at the next start, from the disk. The splash no longer waits on the network.
   1.3.3  Backup → Save profile + apps: one <name>.zip with the profile (.cytv), the apps you pick (.apk/.apks) and
@@ -75,7 +78,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -5695,6 +5698,7 @@ THEME_DIR = f"/sdcard/Android/data/{THEME_PKG}/files"
 THEME_URI = f"content://{THEME_PKG}.theme"
 THEME_TMP = "/data/local/tmp/cyt-theme"
 MY_THEME = APPDATA / "my-theme"
+USER_THEMES = _documents() / "CleanYourTV themes"   # themes you add; a toolkit update never touches them
 WALL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REMOTE_PATH_RE = re.compile(r"/[A-Za-z0-9._/-]+")
 # Same restart as theme.sh: force-stop the launcher, bring Home back the right way, and put the remote's
@@ -5906,12 +5910,59 @@ def load_themes():
     except OSError:
         pass
     themes = []
-    if root.is_dir():
-        for d in sorted(root.iterdir()):
-            if (d / "config.json").is_file():
-                themes.append({"name": d.name, "path": d, "desc": desc.get(d.name, ""),
-                               "shot": d / "screenshot.jpg"})
+    for base, mine in ((USER_THEMES, True), (root, False)):
+        if not base.is_dir():
+            continue
+        for d in sorted(base.iterdir(), key=lambda x: x.name.lower()):
+            if not (d / "config.json").is_file():
+                continue
+            text = desc.get(d.name, "") if not mine else ""
+            try:
+                text = (d / "about.txt").read_text(encoding="utf-8").strip().splitlines()[0]
+            except (OSError, IndexError):
+                pass
+            shot = next((d / n for n in ("screenshot.jpg", "preview.jpg", "wallpaper.jpg") if (d / n).is_file()),
+                        d / "screenshot.jpg")
+            themes.append({"name": d.name, "path": d, "desc": text, "shot": shot, "mine": mine})
     return themes
+
+
+def import_themes(src):
+    """Copies the theme folders in a .zip (or a folder) into USER_THEMES; returns their names."""
+    import tempfile
+    import zipfile
+    src = Path(src)
+    tmp = None
+    try:
+        if src.is_file():
+            tmp = Path(tempfile.mkdtemp(prefix="cyt-theme-"))
+            with zipfile.ZipFile(src) as z:
+                for n in z.namelist():
+                    if n.startswith("/") or ".." in Path(n).parts:
+                        raise RuntimeError(f"unsafe path in the zip: {n}")
+                z.extractall(tmp)
+            base = tmp
+        else:
+            base = src
+        found = sorted({c.parent for c in base.rglob("config.json")
+                        if not any(p.startswith(("_", ".")) for p in c.relative_to(base).parts)})
+        if not found:
+            raise RuntimeError("no theme in it (a theme is a folder with a config.json)")
+        names = []
+        USER_THEMES.mkdir(parents=True, exist_ok=True)
+        for d in found:
+            json.loads((d / "config.json").read_text(encoding="utf-8"))   # refuse broken JSON
+            name = d.name if d != base else src.stem
+            name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-") or "theme"
+            dest = USER_THEMES / name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(d, dest)
+            names.append(name)
+        return names
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class ThemeCard(QFrame):
@@ -5941,6 +5992,9 @@ class ThemeCard(QFrame):
         row = QHBoxLayout()
         row.addWidget(title)
         row.addStretch(1)
+        if theme.get("mine"):
+            row.addWidget(Pill("mine", C["accent"]))
+            self.setToolTip(str(theme["path"]))
         if ended:
             row.addWidget(Pill("ended", C["muted"]))
             self.setToolTip(f"Its festive skin switched itself off after {until}.")
@@ -5982,6 +6036,10 @@ class ThemesPage(Page):
         self.reset_btn = button("Reset to default", None, "undo", "Remove the theme; back to the launcher's own config")
         self.apply_btn = button("Apply to TV", "Primary", "check")
         self.apply_btn.setEnabled(False)
+        self.import_btn = button("Add themes…", "Ghost", "palette", "Add themes from a .zip into " + str(USER_THEMES))
+        self.folder_btn = button("Folder", "Ghost", "folder", "Open " + str(USER_THEMES))
+        top.addWidget(self.import_btn)
+        top.addWidget(self.folder_btn)
         top.addWidget(self.reset_btn)
         top.addWidget(self.apply_btn)
         lay.addLayout(top)
@@ -5991,14 +6049,9 @@ class ThemesPage(Page):
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(12)
         self.cards = []
-        themes = load_themes()
-        for i, t in enumerate(themes):
-            cd = ThemeCard(t)
-            cd.clicked.connect(self.pick)
-            self.cards.append(cd)
-            self.grid.addWidget(cd, i // 3, i % 3, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        if not themes:
-            lay.addWidget(label("No themes folder found in the toolkit.", "Muted"))
+        self.none_lbl = label("No themes folder found in the toolkit.", "Muted")
+        lay.addWidget(self.none_lbl)
+        self.fill_gallery()
         lay.addWidget(strip)
         lay.addWidget(label("Previews are the theme authors' own screenshots; your apps and wallpaper may differ. "
                             "Applying restarts the launcher, which takes a few seconds.", "Dim", wrap=True))
@@ -6138,6 +6191,8 @@ class ThemesPage(Page):
         self.reset_btn.clicked.connect(self.reset)
         self.from_sel.clicked.connect(self.start_from_selected)
         self.json_btn.clicked.connect(self.edit_json)
+        self.import_btn.clicked.connect(self.import_themes)
+        self.folder_btn.clicked.connect(self.open_theme_folder)
         self.my_apply.clicked.connect(self.save_apply)
         add.clicked.connect(self.add_app)
         rem.clicked.connect(lambda: [self.dock.takeItem(self.dock.row(i)) for i in self.dock.selectedItems()])
@@ -6145,6 +6200,42 @@ class ThemesPage(Page):
         self.wall_clear.clicked.connect(self.clear_wall)
 
     # --- gallery ------------------------------------------------------------------------------
+    def fill_gallery(self, select=None):
+        for cd in self.cards:
+            self.grid.removeWidget(cd)
+            cd.deleteLater()
+        self.cards = []
+        themes = load_themes()
+        for i, t in enumerate(themes):
+            cd = ThemeCard(t)
+            cd.clicked.connect(self.pick)
+            self.cards.append(cd)
+            self.grid.addWidget(cd, i // 3, i % 3, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.none_lbl.setVisible(not themes)
+        if select:
+            t = next((c.theme for c in self.cards if c.theme.get("mine") and c.theme["name"] == select), None)
+            if t:
+                self.pick(t)
+
+    def import_themes(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Add themes", str(Path.home() / "Downloads"),
+                                           "Themes (*.zip);;All files (*)")
+        if not f:
+            return
+        import zipfile
+        try:
+            names = import_themes(f)
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError) as e:
+            self.status.set(f"Could not add themes from <b>{Path(f).name}</b>: {e}", "bad")
+            return
+        self.fill_gallery(select=names[0] if len(names) == 1 else None)
+        self.status.set(f"Added {len(names)} theme{'s' if len(names) != 1 else ''}: <b>{', '.join(names)}</b>. "
+                        "Pick one and press Apply.", "ok")
+
+    def open_theme_folder(self):
+        USER_THEMES.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(USER_THEMES)))
+
     def pick(self, theme):
         self.selected = theme
         for cd in self.cards:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.5
+
+Themes: Add themes… takes a .zip of theme folders (or one theme) into Documents/CleanYourTV themes, where a toolkit update never touches them; they show first in the gallery, marked "mine", with their about.txt line and preview. Folder opens that place. Six new themes in `themes/`: aegean-night, meteora-dusk, olympus-mist, neon-grid, oled-black and ellada.
+
 ## 1.3.4
 
 Faster start: the toolkit update check and download run in the background after the window opens, and the update is put in place at the next start, from the disk. The splash no longer waits on the network.

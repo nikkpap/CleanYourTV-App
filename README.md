@@ -37,7 +37,7 @@ date.
 - **Install apps from the PC**: pick an .apk (or an .apks/.xapk bundle) and it is copied to the TV and
   installed.
 - **Copy apps to the PC**: tick one or more apps on the TV and they are saved as .apk / .apks files.
-- **Themes**: the toolkit's themes and your own (wallpaper, columns, switches), pushed and verified.
+- **Themes**: the toolkit's themes, the six in [`themes/`](themes/) (Add themes… takes their .zip) and your own (wallpaper, columns, switches), pushed and verified.
 - **Profiles**: save a whole setup and apply it to another box; **Save profile + apps** puts the profile,
   your apps and the launcher switches in one .zip that sets a box of the same kind up in one go.
 - **Finish**: restore, give Home back to the original launcher and remove only the new one (the
