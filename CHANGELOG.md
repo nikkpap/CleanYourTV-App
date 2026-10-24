@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+Works with the toolkit's newest launcher (single-row Home): the Live TV row and the Open entry were left out of builds since that change. A build without them now says so in a dialog, not only in the log.
+
 ## 1.2.0
 
 The remote's TV button opens the TV's Live TV app directly (Sony com.sony.dtv.tvx and the others the app finds), through the Input button helper. A switch on Extras.

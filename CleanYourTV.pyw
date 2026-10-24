@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.0.pyw            normal mode
-    python CleanYourTV_v1.2.0.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.1.pyw            normal mode
+    python CleanYourTV_v1.2.1.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.1  Works with the toolkit's newest launcher (single-row Home): the Live TV row and the Open entry were left out
+         of builds since that change. A build without them now says so in a dialog, not only in the log.
   1.2.0  The remote's TV button opens the TV's Live TV app directly (Sony com.sony.dtv.tvx and the others the app
          finds): a KEYCODE_TV app key, through the Input button helper. A switch on Extras.
   1.1.9  The launcher logs what the TV's channel list gave the Live TV row (rows, hidden, radio, unnamed), and the
@@ -46,7 +48,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -3770,8 +3772,8 @@ LIVETV_EDITS = [
      '        adapter = new AppAdapter(this, this, COLUMNS, cfg);\n',
      '        adapter = new AppAdapter(this, this, COLUMNS, cfg);\n        if (ChannelRow.enabled(this)) {\n            channelRow = new ChannelRow(channelListener, animations && !reducedMotion);\n            channelsOnTop = ChannelRow.onTop(this);\n            if (channelsOnTop) addTopChannels();\n            else adapter.setChannelRow(channelRow);\n        }\n'),
     ('java/com/gathin/tvhome/MainActivity.java',
-     '{ return adapter != null && adapter.isLibraryAt(position) ? COLUMNS : 1; }',
-     '{ return adapter != null && (adapter.isLibraryAt(position) || adapter.isChannelsAt(position)) ? COLUMNS : 1; }'),
+     'adapter.isLibraryAt(position) ? COLUMNS : 1; }',
+     '(adapter.isLibraryAt(position) || adapter.isChannelsAt(position)) ? COLUMNS : 1; }'),
     ('java/com/gathin/tvhome/MainActivity.java',
      '        RecyclerView.ViewHolder footer = grid.findViewHolderForAdapterPosition(adapter.appCount());\n        final boolean restoreLibrary = adapter.isLibraryAt(adapter.appCount()) && footer != null\n',
      '        RecyclerView.ViewHolder footer = grid.findViewHolderForAdapterPosition(adapter.libraryPosition());\n        final boolean restoreLibrary = adapter.isLibraryAt(adapter.libraryPosition()) && footer != null\n'),
@@ -3824,8 +3826,8 @@ LIVETV_EDITS = [
      '            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar\n',
      '            if (position < COLUMNS) {\n                if (topChannelsShown()) { focusTopChannels(); return true; }   // the Live TV row above the dock\n                return false;          // dock row: let focus move to the top bar\n            }\n'),
     ('java/com/gathin/tvhome/MainActivity.java',
-     '                // Back to the dock tile Up came from, not wherever the focus finder lands.\n                focusTile(lastFocused % COLUMNS);\n',
-     '                // Back to the dock tile Up came from, not wherever the focus finder lands; the Live TV row\n                // above the dock comes first when it is there.\n                if (topChannelsShown()) focusTopChannels();\n                else focusTile(lastFocused % COLUMNS);\n'),
+     '                // Back to the dock tile Up came from, not wherever the focus finder lands.\n',
+     '                // Back to the dock tile Up came from, not wherever the focus finder lands; the Live TV row\n                // above the dock comes first when it is there.\n                if (topChannelsShown()) { focusTopChannels(); return true; }\n'),
     ('java/com/gathin/tvhome/MainActivity.java',
      '        if (dockRow && position < adapter.movableCount()) {\n',
      "        // Open first, as in the stock launcher's menu.\n        addSettingsMenuRow(rows, popup, R.string.tile_open, () -> {\n            if (card != null) card.performClick();\n        });\n        if (dockRow && position < adapter.movableCount()) {\n"),
@@ -4808,6 +4810,11 @@ class ExtrasPage(Page):
             ok, why = False, str(e)
         self.livetv_built = ok
         self._say("Live TV row: " + ("included" if ok else f"left out, {why}"))
+        if not ok and (self.live_row_b.isChecked() or self.tile_menu_b.isChecked()):
+            inform(self, "Built without this app's additions",
+                   "The toolkit's launcher changed in a way this version of the app does not know yet, so this build "
+                   "has no Live TV channels row and no Open in the hold-OK menu. Everything else is installed as usual."
+                   "<br><br>Get the newest CleanYourTV (github.com/nikkpap/CleanYourTV-App) and build again.", "warn")
         want_tile, want_row = self.live_tile_b.isChecked(), self.live_row_b.isChecked()
         want_icon, want_pos = self.live_icon.currentData(), self.live_pos.currentData()
         want_tv_key = False
