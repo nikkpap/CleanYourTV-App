@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.8.pyw            normal mode
-    python CleanYourTV_v1.3.8.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.9.pyw            normal mode
+    python CleanYourTV_v1.3.9.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.9  Starting a newer version while an older one (1.3.9 on) is open closes the older one and opens the new one,
+         instead of bringing the old window back. The backup folder can no longer point at an old "CleanYourTV
+         backups" folder, in any Documents location: it is Documents/CleanYourTV/backup.
   1.3.8  Fixes for 1.3.6/1.3.7: a backup could still go to the old Documents/CleanYourTV backups when Windows kept the
          old folder busy; now the move copies what it cannot rename, and every start points saved folders at
          Documents/CleanYourTV. The profile name is always the hardware's (with the device code when the model is
@@ -87,7 +90,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -720,6 +723,15 @@ def migrate_documents(settings=None):
             v = settings.value(k)
             if not isinstance(v, str):
                 continue
+            if "\\" in v or "/" in v:
+                tail = Path(v.replace("\\", "/"))
+                hit = next(((p, sub) for p in [tail, *tail.parents] for old_name, sub in CYT_FOLDERS
+                            if p.name == old_name), None)
+                if hit:   # an old folder in any Documents (OneDrive moves it): to its place in CleanYourTV/
+                    p, sub = hit
+                    rest = tail.relative_to(p)
+                    settings.setValue(k, str(home / sub / rest) if str(rest) != "." else str(home / sub))
+                    continue
             for old, new in done:
                 o = str(old)
                 vv, oo = v.replace("/", os.sep).rstrip(os.sep), o.replace("/", os.sep)
@@ -929,11 +941,24 @@ def single_instance():
     probe = QLocalSocket()
     probe.connectToServer(name)
     if probe.waitForConnected(500):
-        probe.write(b"show\n")
+        # "show <version>": an older copy that is running steps aside for this newer one ("yield") and closes;
+        # the same or a newer one comes to the front and this start quits.
+        probe.write(f"show {APP_VERSION}\n".encode())
         probe.flush()
         probe.waitForBytesWritten(500)
+        answer = bytes(probe.readAll()) if probe.waitForReadyRead(1500) else b""
         probe.disconnectFromServer()
-        return False
+        if b"yield" not in answer:
+            return False
+        for _ in range(60):   # up to 15 s for the older copy to finish closing
+            time.sleep(0.25)
+            p2 = QLocalSocket()
+            p2.connectToServer(name)
+            if not p2.waitForConnected(200):
+                break
+            p2.disconnectFromServer()
+        else:
+            return False
     QLocalServer.removeServer(name)   # a socket file left by a crash (Linux/macOS); nothing on Windows
     _INSTANCE = QLocalServer()
     _INSTANCE.listen(name)
@@ -945,10 +970,30 @@ def bring_to_front(win):
     if _INSTANCE is None:
         return
 
+    def newer(v):
+        try:
+            return tuple(int(x) for x in v.split(".")) > tuple(int(x) for x in APP_VERSION.split("."))
+        except ValueError:
+            return False
+
     def show():
+        step_aside = False
         while _INSTANCE.hasPendingConnections():
             c = _INSTANCE.nextPendingConnection()
             c.disconnected.connect(c.deleteLater)
+            line = bytes(c.readAll()) if (c.bytesAvailable() or c.waitForReadyRead(300)) else b""
+            parts = line.decode("utf-8", "replace").split()
+            if len(parts) >= 2 and parts[0] == "show" and newer(parts[1]):
+                c.write(b"yield\n")
+                c.flush()
+                c.waitForBytesWritten(500)
+                step_aside = True
+        if step_aside:
+            log("a newer CleanYourTV was started; this one closes so it can take over", "info")
+            _INSTANCE.close()
+            QTimer.singleShot(100, win.close)
+            QTimer.singleShot(300, QApplication.quit)
+            return
         win.setWindowState((win.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
         win.showNormal() if win.isMinimized() else win.show()
         win.raise_()
@@ -2874,7 +2919,11 @@ class BackupPage(Page):
             "Saves the full package list, the disabled packages, getprop, every system/secure/global setting, "
             "the Home owner and the display size/density into one folder on this PC. It changes nothing on "
             "the TV. Do this once before debloating.", "Muted", wrap=True))
-        self.where = QLineEdit(win.settings.value("backup_dir", str(DEFAULT_BACKUPS)))
+        where = win.settings.value("backup_dir", str(DEFAULT_BACKUPS)) or str(DEFAULT_BACKUPS)
+        if Path(where.replace("\\", "/")).name in [o for o, _ in CYT_FOLDERS]:   # a pre-1.3.6 folder
+            where = str(DEFAULT_BACKUPS)
+            win.settings.setValue("backup_dir", where)
+        self.where = QLineEdit(where)
         browse = button("Browse…", None, "folder")
         browse.clicked.connect(self.browse)
         lay.addWidget(hbox(self.where, browse))
