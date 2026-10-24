@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.7
+
+The launcher switches on Extras (Live TV tile, row, icon, position, hold-OK menu, TV button, key helpers) are kept per TV model: a model seen before gets its own choices back on connect; a new one gets suggestions from what the TV has (Live TV app found or not).
+
 ## 1.2.6
 
 Only one CleanYourTV runs at a time: starting it again brings the open window to the front.

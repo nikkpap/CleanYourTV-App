@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.6.pyw            normal mode
-    python CleanYourTV_v1.2.6.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.7.pyw            normal mode
+    python CleanYourTV_v1.2.7.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.7  The launcher switches on Extras (Live TV tile, row, icon, position, hold-OK menu, TV button, key helpers)
+         are kept per TV model: a model seen before gets its own choices back on connect; a new one gets
+         suggestions from what the TV has (Live TV app found or not).
   1.2.6  Only one CleanYourTV runs at a time: starting it again brings the open window to the front.
   1.2.5  About: keep the toolkit as zip files (toolkit.<date>.<version>.zip in Documents/CleanYourTV toolkit),
          the newest for use and the one before as a backup; Use the previous one, with updates paused until resumed.
@@ -57,7 +60,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -4453,6 +4456,8 @@ class ExtrasPage(Page):
             "later on the Themes page. This app also adds the Live TV app as a tile and a Live TV channels row, at the "
             "top or after the apps: choose below.",
             "Muted", wrap=True))
+        self.extras_for = label("", "Muted", wrap=True, rich=True)
+        lay.addWidget(self.extras_for)
         self.input_svc = Toggle("Input button opens the input switcher (Google TV, InputKeyService)")
         self.home_svc = Toggle("Home button sends ALL_APPS (Xiaomi sticks, HomeKeyService)")
         lay.addWidget(self.input_svc)
@@ -4488,6 +4493,12 @@ class ExtrasPage(Page):
         self.tile_menu_b = Toggle("Hold OK on an app opens a menu: Open, Move (arrows), dock, App info, Uninstall")
         self.tile_menu_b.setChecked(win.settings.value("tile_menu", "1") != "0")
         self.tile_menu_b.toggled.connect(lambda on: win.settings.setValue("tile_menu", "1" if on else "0"))
+        self._extras_key = ""
+        self._extras_loading = False
+        for sw in (self.input_svc, self.home_svc, self.live_tile_b, self.live_row_b, self.tile_menu_b, self.tv_key_b):
+            sw.toggled.connect(lambda _on: self.save_extras())
+        for combo in (self.live_icon, self.live_pos):
+            combo.currentIndexChanged.connect(lambda _i: self.save_extras())
         lay.addWidget(self.tile_menu_b)
         lay.addWidget(label("On some sets (TCL G09) a key helper costs the volume key repeat: hold volume up "
                             "before and after to check. CVTE boards: never enable a helper in the same pass as "
@@ -4560,8 +4571,72 @@ class ExtrasPage(Page):
         setattr(self, f"pill_{key}", p)
         return p
 
+    # ---- the launcher switches, remembered per TV model -------------------------------------------------------
+    @staticmethod
+    def model_key(info):
+        brand = info.get("brand") or info.get("manufacturer") or ""
+        raw = f"{brand} {info.get('model', '')} {info.get('device', '')}".strip()
+        return re.sub(r"[^A-Za-z0-9._ -]", "_", raw)[:80]
+
+    def extras_now(self):
+        return {"input_svc": self.input_svc.isChecked(), "home_svc": self.home_svc.isChecked(),
+                "live_tile": self.live_tile_b.isChecked(), "live_row": self.live_row_b.isChecked(),
+                "tile_menu": self.tile_menu_b.isChecked(), "tv_key": self.tv_key_b.isChecked(),
+                "live_icon": self.live_icon.currentData(), "live_pos": self.live_pos.currentData()}
+
+    def set_extras(self, d):
+        self._extras_loading = True
+        try:
+            # The helper first: the TV-button switch turns it on and goes off with it.
+            for key, t in (("input_svc", self.input_svc), ("home_svc", self.home_svc),
+                           ("live_tile", self.live_tile_b), ("live_row", self.live_row_b),
+                           ("tile_menu", self.tile_menu_b), ("tv_key", self.tv_key_b)):
+                if key in d:
+                    t.setChecked(bool(d[key]))
+            for key, c in (("live_icon", self.live_icon), ("live_pos", self.live_pos)):
+                i = c.findData(d.get(key))
+                if i >= 0:
+                    c.setCurrentIndex(i)
+        finally:
+            self._extras_loading = False
+
+    def save_extras(self):
+        if self._extras_loading or not self._extras_key or not TV.connected:
+            return
+        self.win.settings.setValue(f"extras/{self._extras_key}", json.dumps(self.extras_now()))
+        self.extras_for.setText(f"Launcher switches for <b>{self._extras_name}</b>: saved for this model, used "
+                                "again whenever a TV of this model connects.")
+
+    def apply_extras_for(self, info):
+        """Every TV model keeps its own switches. A model seen before gets what was chosen for it; a new one starts
+        from the current switches, with the Live TV ones set by what this TV has."""
+        self._extras_key = self.model_key(info)
+        self._extras_name = info.get("model") or "this TV"
+        saved = self.win.settings.value(f"extras/{self._extras_key}", "")
+        try:
+            d = json.loads(saved) if saved else None
+        except ValueError:
+            d = None
+        live = info.get("live_tv_app") or ""
+        if d:
+            self.set_extras(d)
+            self.extras_for.setText(f"Launcher switches for <b>{self._extras_name}</b>: the ones you chose for this "
+                                    "model last time.")
+            return
+        d = self.extras_now()
+        d.update(live_tile=bool(live), live_row=bool(live), tile_menu=True)
+        if not live:
+            d["tv_key"] = False
+        self.set_extras(d)
+        self.extras_for.setText(
+            f"Launcher switches for <b>{self._extras_name}</b>: suggested for this TV " +
+            (f"(Live TV app found: {live}). " if live else "(no Live TV app or tuner found, so the Live TV ones are "
+                                                          "off). ") +
+            "Change any of them and they are kept for this model.")
+
     def on_connection(self, ok, info):
         if ok:
+            self.apply_extras_for(info)
             self.refresh()
             sdk = info.get("sdk_int", 0)
             self.build.setEnabled(sdk >= 26)
