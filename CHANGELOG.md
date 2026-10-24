@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.10
+
+Backups and profiles are named by the hardware alone, e.g. "SkyworthDigital COSMOTE-TV TV Box (HY44G)": a backup folder adds only the date and time, no IP address; the profile name drops the Android version.
+
 ## 1.3.9
 
 Starting a newer version while an older one (1.3.9 on) is open closes the older one and opens the new one, instead of bringing the old window back. The backup folder can no longer point at an old "CleanYourTV backups" folder, in any Documents location: it is Documents/CleanYourTV/backup.

@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.9.pyw            normal mode
-    python CleanYourTV_v1.3.9.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.10.pyw            normal mode
+    python CleanYourTV_v1.3.10.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.10 Backups and profiles are named by the hardware alone, e.g. "SkyworthDigital COSMOTE-TV TV Box (HY44G)":
+         a backup folder adds only the date and time, no IP address; the profile name drops the Android version.
   1.3.9  Starting a newer version while an older one (1.3.9 on) is open closes the older one and opens the new one,
          instead of bringing the old window back. The backup folder can no longer point at an old "CleanYourTV
          backups" folder, in any Documents location: it is Documents/CleanYourTV/backup.
@@ -90,7 +92,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.3.10"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2419,7 +2421,8 @@ def ask(parent, title, text, ok="Continue", kind="Primary"):
 
 
 def hardware_name(info):
-    """A profile name from the hardware: maker, brand when it differs, model and Android version."""
+    """The hardware's name: maker, brand when it differs, model, and the device code when the model doesn't
+    contain it, e.g. "SkyworthDigital COSMOTE-TV TV Box (HY44G)". Profiles and backups are named by it."""
     info = info or {}
     model = (info.get("model") or "").strip()
     parts = []
@@ -2431,8 +2434,7 @@ def hardware_name(info):
     dev = (info.get("device") or "").strip()
     if dev and dev.lower() not in name.lower():   # a generic model ("TV Box") says little; the device code does
         name += f" ({dev})"
-    rel = (info.get("release") or "").strip()
-    return f"{name} - Android {rel}" if rel else name
+    return name
 
 
 def ask_name(parent, title, text, default="", ok="Save", cancel="Cancel"):
@@ -3343,8 +3345,7 @@ class BackupPage(Page):
 
 def make_backup(root):
     info = TV.info or {}
-    tag = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{info.get('model', 'tv')}_{TV.host}").strip("-")
-    folder = root / f"{tag}_{time.strftime('%Y-%m-%d_%H%M%S')}"
+    folder = root / f"{_safe_name(hardware_name(info))} {time.strftime('%Y-%m-%d %H%M%S')}"
     folder.mkdir(parents=True, exist_ok=True)
     items = [
         ("packages-all.txt", "pm list packages -f"),
@@ -3364,7 +3365,7 @@ def make_backup(root):
     for name, cmd in items:
         (folder / name).write_text(TV.sh(cmd, quiet=True), encoding="utf-8")
     (folder / "README.txt").write_text(
-        f"CleanYourTV backup of {info.get('model')} ({TV.host}) taken {time.strftime('%Y-%m-%d %H:%M')}.\n"
+        f"CleanYourTV backup of {hardware_name(info)} ({TV.host}) taken {time.strftime('%Y-%m-%d %H:%M')}.\n"
         "Nothing here is applied automatically. To put a package back: pm enable <package>\n"
         "packages-disabled.txt lists what was ALREADY disabled before cleanup: leave those as they are.\n",
         encoding="utf-8")
