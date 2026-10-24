@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.5.pyw            normal mode
-    python CleanYourTV_v1.2.5.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.6.pyw            normal mode
+    python CleanYourTV_v1.2.6.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,7 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.6  Only one CleanYourTV runs at a time: starting it again brings the open window to the front.
   1.2.5  About: keep the toolkit as zip files (toolkit.<date>.<version>.zip in Documents/CleanYourTV toolkit),
          the newest for use and the one before as a backup; Use the previous one, with updates paused until resumed.
   1.2.4  Live TV row: hold OK on a channel to hide it, move it (Left/Right, OK places it) or show the hidden ones
@@ -56,7 +57,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -724,8 +725,59 @@ def make_app():
     return app
 
 
+_INSTANCE = None   # the QLocalServer that marks this copy of the app as the running one
+
+
+def single_instance():
+    """True when this is the only CleanYourTV running. Otherwise the running one is asked to come to the front and
+    this one should quit: two copies would share one ADB connection, one settings file and one toolkit folder."""
+    global _INSTANCE
+    import getpass
+    from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+    make_app()
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "user"
+    name = "CleanYourTV-" + re.sub(r"[^A-Za-z0-9]", "_", user)
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    if probe.waitForConnected(500):
+        probe.write(b"show\n")
+        probe.flush()
+        probe.waitForBytesWritten(500)
+        probe.disconnectFromServer()
+        return False
+    QLocalServer.removeServer(name)   # a socket file left by a crash (Linux/macOS); nothing on Windows
+    _INSTANCE = QLocalServer()
+    _INSTANCE.listen(name)
+    return True
+
+
+def bring_to_front(win):
+    """Another start of the app asked for the running one: show the window, restored and on top."""
+    if _INSTANCE is None:
+        return
+
+    def show():
+        while _INSTANCE.hasPendingConnections():
+            c = _INSTANCE.nextPendingConnection()
+            c.disconnected.connect(c.deleteLater)
+        win.setWindowState((win.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+        win.showNormal() if win.isMinimized() else win.show()
+        win.raise_()
+        win.activateWindow()
+        QApplication.alert(win, 3000)   # flashes the taskbar button where Windows will not hand over the focus
+
+    _INSTANCE.newConnection.connect(show)
+    if _INSTANCE.hasPendingConnections():   # someone knocked while the splash was still up
+        QTimer.singleShot(0, show)
+
+
 def startup():
     """Show the splash, run the checks, return the toolkit folder."""
+    if __name__ == "__main__" and not os.environ.get("CYT_MULTI") and not single_instance():
+        sys.exit(0)
     if os.environ.get("CYT_NO_SPLASH"):
         return _find_toolkit() or HERE
     if os.name == "nt":
@@ -6938,6 +6990,7 @@ def main():
     BUS = Bus()
     win = MainWindow()
     win.show()
+    bring_to_front(win)
     if win.settings.value("auto_connect", "true") == "true" or DEMO:
         QTimer.singleShot(500, win.page_list[0].auto_connect)
     if not DEMO:   # once per location of this file; quietly, in the background

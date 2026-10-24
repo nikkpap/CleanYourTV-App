@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.6
+
+Only one CleanYourTV runs at a time: starting it again brings the open window to the front.
+
 ## 1.2.5
 
 About: keep the toolkit as zip files (toolkit.<date>.<version>.zip in Documents/CleanYourTV toolkit), the newest for use and the one before as a backup; Use the previous one, with updates paused until resumed.
