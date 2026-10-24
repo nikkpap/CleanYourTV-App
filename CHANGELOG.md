@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.9
+
+The launcher logs what the TV's channel list gave the Live TV row (rows, hidden, radio, unnamed), and the Launcher report presses Home first so that line is fresh: for TVs whose row stays empty (Sony).
+
 ## 1.1.8
 
 Extras: install an app from this PC (Browse APK…): an .apk, the .apk parts of one app, or an .apks/.xapk bundle, copied to the TV with progress and installed or updated, errors in plain words.
