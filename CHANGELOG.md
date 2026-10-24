@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4
+
+Faster start: the toolkit update check and download run in the background after the window opens, and the update is put in place at the next start, from the disk. The splash no longer waits on the network.
+
 ## 1.3.3
 
 Backup → Save profile + apps: one <name>.zip with the profile (.cytv), the apps you pick (.apk/.apks) and the launcher switches. Apply to TV on such a zip sets a box of the same kind up in order: apps, launcher build, then the profile (its parts chosen, packages in batches with screenshots, backup and undo first).

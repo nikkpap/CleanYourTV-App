@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.3.pyw            normal mode
-    python CleanYourTV_v1.3.3.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.4.pyw            normal mode
+    python CleanYourTV_v1.3.4.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.4  Faster start: the toolkit update check and download run in the background after the window opens, and the
+         update is put in place at the next start, from the disk. The splash no longer waits on the network.
   1.3.3  Backup → Save profile + apps: one <name>.zip with the profile (.cytv), the apps you pick (.apk/.apks) and
          the launcher switches. Apply to TV on such a zip sets a box of the same kind up in order: apps, launcher
          build, then the profile (its parts chosen, packages in batches with screenshots, backup and undo first).
@@ -73,7 +75,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -471,22 +473,29 @@ class StartupWorker(QThread):
             held = QSettings("CleanYourTV", "CleanYourTV").value("toolkit_hold", "")
             self.say(0.84, "Using the previous toolkit", f"version {held[:7]}, updates paused (About)")
         elif managed:
-            latest = self.latest_sha()
-            try:
-                current = json.loads(TOOLKIT_VERSION.read_text()).get("sha")
-            except (OSError, ValueError):
-                current = None
-            if latest is None:
-                self.say(0.82, "Offline – update check skipped", "using the toolkit already on this PC")
-            elif latest != current:
-                self.say(0.74, "Updating the toolkit", f"new version {latest[:7]}")
+            # The check and the download run in the background once the window is open (download_toolkit_update);
+            # here only an update fetched last time is put in place, from the disk: no waiting on the network.
+            pending = pending_toolkit()
+            if pending:
+                zip_path, sha = pending
+                self.say(0.76, "Installing the toolkit update", f"version {sha[:7]}, downloaded last time")
                 try:
-                    repo = self.fetch_toolkit(0.74, 0.86, latest)
-                    self.say(0.86, "Toolkit updated", f"version {latest[:7]}")
+                    repo = install_toolkit_zip(zip_path, sha)
+                    try:
+                        keep_toolkit_zip(zip_path, sha)
+                    except Exception:
+                        pass
+                    self.say(0.86, "Toolkit updated", f"version {sha[:7]}")
                 except Exception as e:
                     self.say(0.86, "Update postponed", str(e)[:90])
+                finally:
+                    clear_pending_toolkit()
             else:
-                self.say(0.84, "Toolkit is up to date", f"version {latest[:7]}")
+                try:
+                    current = json.loads(TOOLKIT_VERSION.read_text()).get("sha") or ""
+                except (OSError, ValueError):
+                    current = ""
+                self.say(0.84, "Toolkit ready", f"version {current[:7]}" if current else "")
         else:
             self.say(0.84, "Using your own toolkit copy", str(repo)[:90])
         self.pause(s)
@@ -557,6 +566,76 @@ def _documents():
     from PyQt6.QtCore import QStandardPaths
     d = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
     return Path(d) if d else Path.home() / "Documents"
+
+
+PENDING_ZIP = TOOLKIT_HOME / "pending.zip"
+PENDING_META = TOOLKIT_HOME / "pending.json"
+
+
+def pending_toolkit():
+    """(zip, version) of a toolkit update downloaded in the background last time, or None."""
+    try:
+        sha = json.loads(PENDING_META.read_text()).get("sha", "")
+    except (OSError, ValueError):
+        return None
+    if PENDING_ZIP.is_file() and re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        return PENDING_ZIP, sha
+    return None
+
+
+def clear_pending_toolkit():
+    for f in (PENDING_ZIP, PENDING_META):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
+
+def latest_toolkit_sha(deadline=10.0):
+    """The toolkit's newest version on GitHub, or None when the network does not answer within deadline seconds
+    (a slow DNS lookup is not covered by urllib's own timeout, hence the thread)."""
+    out = {}
+
+    def ask():
+        try:
+            with _http(LATEST_SHA_URL, accept="application/vnd.github.sha", timeout=deadline) as r:
+                out["sha"] = r.read(80).decode("ascii", "replace").strip()
+        except Exception:
+            pass
+
+    t = threading.Thread(target=ask, daemon=True)
+    t.start()
+    t.join(deadline)
+    sha = out.get("sha", "")
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+def download_toolkit_update():
+    """In the background while the app runs: when GitHub has a newer toolkit, download it to pending.zip. The next
+    start puts it in place before anything uses the toolkit. Returns the new version, or None."""
+    import zipfile
+    if DEMO or not (TOOLKIT_HOME.resolve() in REPO.resolve().parents):
+        return None
+    if QSettings("CleanYourTV", "CleanYourTV").value("toolkit_hold", ""):
+        return None
+    latest = latest_toolkit_sha()
+    try:
+        current = json.loads(TOOLKIT_VERSION.read_text()).get("sha")
+    except (OSError, ValueError):
+        current = None
+    pend = pending_toolkit()
+    if not latest or latest == current or (pend and pend[1] == latest):
+        return None
+    part = TOOLKIT_HOME / "pending.zip.part"
+    with _http(REPO_ZIP, timeout=60) as r, open(part, "wb") as f:
+        shutil.copyfileobj(r, f, 256 * 1024)
+    with zipfile.ZipFile(part) as z:
+        if "cleanyourtv-main/tools/tv.py" not in z.namelist():
+            part.unlink()
+            raise RuntimeError("the download is not the toolkit")
+    part.replace(PENDING_ZIP)
+    PENDING_META.write_text(json.dumps({"sha": latest, "downloaded": time.strftime("%Y-%m-%d %H:%M")}))
+    return latest
 
 
 def toolkit_archive_dir():
@@ -7601,6 +7680,11 @@ def main():
     win = MainWindow()
     win.show()
     bring_to_front(win)
+    if not DEMO:   # the toolkit update check: in the background, used at the next start
+        QTimer.singleShot(4000, lambda: run_job(
+            download_toolkit_update, pool=NET_POOL, on_error=lambda m: log(f"toolkit update check: {m}", "warn"),
+            on_result=lambda sha: sha and log(f"a toolkit update ({sha[:7]}) was downloaded; it is used from the "
+                                              "next start of the app", "ok")))
     if win.settings.value("auto_connect", "true") == "true" or DEMO:
         QTimer.singleShot(500, win.page_list[0].auto_connect)
     if not DEMO:   # once per location of this file; quietly, in the background
