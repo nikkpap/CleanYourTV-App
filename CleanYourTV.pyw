@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.5.pyw            normal mode
-    python CleanYourTV_v1.3.5.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.6.pyw            normal mode
+    python CleanYourTV_v1.3.6.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.6  Everything of yours in one folder, Documents/CleanYourTV: backup, profile, themes (My theme included),
+         apps and toolkit; the old Documents/CleanYourTV * folders and the My theme are moved there once, and
+         saved settings follow. Save & apply on My theme offers to keep a named copy in themes.
   1.3.5  Themes: Add themes… takes a .zip of theme folders (or one theme) into Documents/CleanYourTV themes, where
          a toolkit update never touches them; they show first in the gallery, marked "mine", with their about.txt
          line and preview. Folder opens that place.
@@ -78,7 +81,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -641,8 +644,67 @@ def download_toolkit_update():
     return latest
 
 
+def cyt_home():
+    """Documents/CleanYourTV: everything of yours the app keeps, one subfolder per kind."""
+    return _documents() / "CleanYourTV"
+
+
+# Where each kind lived before 1.3.6, as Documents/<old name>, and its subfolder of cyt_home() now.
+CYT_FOLDERS = (("CleanYourTV backups", "backup"), ("CleanYourTV profiles", "profile"),
+               ("CleanYourTV themes", "themes"), ("CleanYourTV apps", "apps"), ("CleanYourTV toolkit", "toolkit"))
+
+
+def _merge_move(old, new):
+    """Moves old into new; when new exists, moves what new lacks and leaves clashes in old."""
+    if not old.exists():
+        return
+    if not new.exists():
+        new.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old), str(new))
+        return
+    for child in list(old.iterdir()):
+        if not (new / child.name).exists():
+            shutil.move(str(child), str(new / child.name))
+    try:
+        old.rmdir()
+    except OSError:
+        pass   # a clash left something behind; it stays where it was
+
+
+def migrate_documents(settings=None):
+    """Moves the old Documents/CleanYourTV * folders and the My theme into Documents/CleanYourTV/, once,
+    and points saved settings (backup folder, apps folder, applied themes) at the new places."""
+    docs, home = _documents(), cyt_home()
+    moves = [(docs / old, home / new) for old, new in CYT_FOLDERS]
+    moves.append((APPDATA / "my-theme", home / "themes" / "my-theme"))
+    done = []
+    for old, new in moves:
+        if old.exists():
+            try:
+                _merge_move(old, new)
+                done.append((old, new))
+            except OSError as e:
+                log(f"could not move {old} to {new}: {e}", "warn")
+    for sub in ("backup", "profile", "themes", "apps", "toolkit"):
+        try:
+            (home / sub).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    if settings is not None and done:
+        for k in settings.allKeys():
+            v = settings.value(k)
+            if not isinstance(v, str):
+                continue
+            for old, new in done:
+                o = str(old)
+                if v == o or v.startswith(o + os.sep) or v.startswith(o + "/"):
+                    settings.setValue(k, str(new) + v[len(o):])
+                    break
+    return done
+
+
 def toolkit_archive_dir():
-    return _documents() / "CleanYourTV toolkit"
+    return cyt_home() / "toolkit"
 
 
 def toolkit_zips():
@@ -949,7 +1011,7 @@ GUI_LISTS = DATA / "gui-lists"
 SHOTS = DATA / "shots"
 
 
-DEFAULT_BACKUPS = _documents() / "CleanYourTV backups"
+DEFAULT_BACKUPS = cyt_home() / "backup"
 PACKAGE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+")
 COMPONENT_RE = re.compile(r"^([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)$")
 HOME_QUERY = "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME"
@@ -2283,6 +2345,18 @@ def ask(parent, title, text, ok="Continue", kind="Primary"):
     d.lay.addWidget(label(text, "Muted", wrap=True, rich="<" in text))
     d.buttons(ok, "Cancel", kind)
     return d.exec() == QDialog.DialogCode.Accepted
+
+
+def ask_name(parent, title, text, default="", ok="Save", cancel="Cancel"):
+    """A short question with a name to type; the name, or "" when cancelled or left empty."""
+    d = Dialog(parent, title, 520)
+    d.lay.addWidget(label(text, "Muted", wrap=True, rich="<" in text))
+    box = QLineEdit(default)
+    box.setPlaceholderText("Name, e.g. full-black-nikos")
+    d.lay.addWidget(box)
+    d.buttons(ok, cancel)
+    box.setFocus()
+    return box.text().strip() if d.exec() == QDialog.DialogCode.Accepted else ""
 
 
 def inform(parent, title, text, kind="info"):
@@ -5032,7 +5106,7 @@ class ExtrasPage(Page):
         self.pull_btn.clicked.connect(self.pull_apps)
         self.pull_open = button("Open folder", None, "folder")
         self.pull_open.clicked.connect(lambda: open_path(Path(getattr(self, "pull_dest", "") or
-                                                              _documents() / "CleanYourTV apps")))
+                                                              cyt_home() / "apps")))
         self.pull_open.hide()
         lay.addWidget(hbox(self.pull_btn, self.pull_open, None))
         self.pull_bar = QProgressBar()
@@ -5477,7 +5551,7 @@ class ExtrasPage(Page):
         def chosen(apps):
             self.pull_btn.setEnabled(True)
             self.pull_msg.set("")
-            dest = self.win.settings.value("pull_dir", str(_documents() / "CleanYourTV apps"))
+            dest = self.win.settings.value("pull_dir", str(cyt_home() / "apps"))
             d = PickAppsDialog(self, apps, dest)
             if d.exec() != QDialog.DialogCode.Accepted or not d.ticked:
                 return
@@ -5697,8 +5771,8 @@ DREAM_COMPONENT = f"{OUR_LAUNCHER}/.ClockDream"
 THEME_DIR = f"/sdcard/Android/data/{THEME_PKG}/files"
 THEME_URI = f"content://{THEME_PKG}.theme"
 THEME_TMP = "/data/local/tmp/cyt-theme"
-MY_THEME = APPDATA / "my-theme"
-USER_THEMES = _documents() / "CleanYourTV themes"   # themes you add; a toolkit update never touches them
+USER_THEMES = cyt_home() / "themes"   # themes you add or save; a toolkit update never touches them
+MY_THEME = USER_THEMES / "my-theme"   # the My theme editor's working copy
 WALL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 REMOTE_PATH_RE = re.compile(r"/[A-Za-z0-9._/-]+")
 # Same restart as theme.sh: force-stop the launcher, bring Home back the right way, and put the remote's
@@ -6488,6 +6562,21 @@ class ThemesPage(Page):
         (MY_THEME / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         self.base = cfg
         self.my_msg.set(f"Saved to {MY_THEME}.", "ok")
+        name = ask_name(self, "Keep it as a theme?",
+                        f"My theme is saved. Keep a copy under a name of its own in <b>{USER_THEMES}</b>, so it stays "
+                        "in the gallery after you change My theme again?",
+                        self.win.settings.value("my_theme_name", ""), "Keep a copy", "Not now")
+        if name:
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-.") or "my-theme-copy"
+            dest = USER_THEMES / safe
+            if safe == MY_THEME.name or not dest.exists() or ask(
+                    self, "Replace theme?", f"A theme called <b>{safe}</b> exists. Replace it?", "Replace"):
+                if dest != MY_THEME:
+                    shutil.rmtree(dest, ignore_errors=True)
+                    shutil.copytree(MY_THEME, dest)
+                self.win.settings.setValue("my_theme_name", name)
+                self.my_msg.set(f"Saved to {MY_THEME} and kept as <b>{safe}</b> in {USER_THEMES}.", "ok")
+        self.fill_gallery(select=safe if name else None)
         if TV.connected:
             self.apply(MY_THEME)
 
@@ -6495,7 +6584,7 @@ class ThemesPage(Page):
 # ----------------------------------------------------------------------------------------------
 # Profiles: a TV's whole setup in one .cytv file (packages, theme, settings), to apply again later
 # ----------------------------------------------------------------------------------------------
-PROFILE_DIR = _documents() / "CleanYourTV profiles"
+PROFILE_DIR = cyt_home() / "profile"
 PROFILE_CACHE = APPDATA / "profile-cache"
 PROFILE_VERSION = 1
 PROFILE_SETTINGS = [
@@ -7768,6 +7857,13 @@ def main():
     app = make_app()
     app.setStyleSheet(stylesheet())
     BUS = Bus()
+    if not DEMO:
+        try:
+            moved = migrate_documents(QSettings("CleanYourTV", "CleanYourTV"))
+            for old, new in moved:
+                log(f"moved {old} to {new}", "ok")
+        except Exception as e:   # never stop the app over tidying folders
+            log(f"folder move: {e}", "warn")
     win = MainWindow()
     win.show()
     bring_to_front(win)

@@ -16,7 +16,7 @@ the wallpaper, not a screenshot from a TV.
 | `ellada/` | The three Greek scenes by time of day (Olympus morning, Meteora evening, Aegean night), with the place's name under the buttons |
 
 **In the app:** Themes → Add themes… and pick `CleanYourTV-themes.zip` (or copy the folders into
-`Documents\CleanYourTV themes`). They show first in the gallery, marked *mine*. Pick one and press Apply.
+`Documents\CleanYourTV\themes`). They show first in the gallery, marked *mine*. Pick one and press Apply.
 
 **With the toolkit:** `TV_HOST=<tv ip> tools/theme.sh themes/aegean-night`.
 

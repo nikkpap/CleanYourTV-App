@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.6
+
+Everything of yours in one folder, Documents/CleanYourTV: `backup`, `profile`, `themes` (My theme included), `apps` and `toolkit`. The old Documents/CleanYourTV * folders and the My theme are moved there once at the first start, and saved settings follow them. Save & apply on My theme offers to keep a named copy in `themes`.
+
 ## 1.3.5
 
 Themes: Add themes… takes a .zip of theme folders (or one theme) into Documents/CleanYourTV themes, where a toolkit update never touches them; they show first in the gallery, marked "mine", with their about.txt line and preview. Folder opens that place. Six new themes in `themes/`: aegean-night, meteora-dusk, olympus-mist, neon-grid, oled-black and ellada.
