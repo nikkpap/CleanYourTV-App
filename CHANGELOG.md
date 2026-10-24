@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.8
+
+Live TV row: each channel once (a TV can list the same one twice: two tuners or a copy per user profile); the hold-OK menu has Unhide all channels and Original channel order.
+
 ## 1.2.7
 
 The launcher switches on Extras (Live TV tile, row, icon, position, hold-OK menu, TV button, key helpers) are kept per TV model: a model seen before gets its own choices back on connect; a new one gets suggestions from what the TV has (Live TV app found or not).
