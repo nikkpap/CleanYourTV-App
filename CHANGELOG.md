@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.6
+
+On/off switches in the iPhone style instead of checkboxes, everywhere in the app.
+
 ## 1.1.5
 
 Hold OK on an app opens a menu like the stock launcher's: Open, Move (arrows), dock, App info (the launcher's tile_menu, with Open added; Greek labels). A switch on Extras, on by default.

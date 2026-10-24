@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.1.5.pyw            normal mode
-    python CleanYourTV_v1.1.5.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.1.6.pyw            normal mode
+    python CleanYourTV_v1.1.6.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,7 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.1.6  On/off switches in the iPhone style instead of checkboxes, everywhere in the app.
   1.1.5  Hold OK on an app opens a menu like the stock launcher's: Open, Move (arrows), dock, App info
          (the launcher's tile_menu, with Open added; Greek labels). A switch on Extras, on by default.
   1.1.4  Top Live TV row: the remote moves along the top bar again (Inputs, Wi-Fi, Settings), and Up from a
@@ -37,7 +38,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -234,7 +235,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import (QAbstractTableModel, QByteArray, QModelIndex, QObject, QPointF, QProcess,
                           QProcessEnvironment, QRectF, QRunnable, QSettings, QSize,
                           QSortFilterProxyModel, Qt, QEventLoop, QThread, QThreadPool, QTimer, QUrl,
-                          pyqtSignal)
+                          QVariantAnimation, QEasingCurve, pyqtSignal)
 from PyQt6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QImage,
                          QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut)
 from PyQt6.QtSvg import QSvgRenderer
@@ -1426,6 +1427,87 @@ def label(text, name=None, wrap=False, rich=False):
     else:
         l.setTextFormat(Qt.TextFormat.PlainText)
     return l
+
+
+class Toggle(QCheckBox):
+    """An on/off switch in the iPhone style: a rounded track with a sliding knob, the label beside it.
+    A QCheckBox underneath, so isChecked, setChecked, toggled and the rest work as before."""
+    W, H, GAP = 44, 24, 12
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pos = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(170)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(self._moved)
+        self.toggled.connect(self._slide)
+
+    def _moved(self, v):
+        self._pos = float(v)
+        self.update()
+
+    def _slide(self, on):
+        end = 1.0 if on else 0.0
+        if not self.isVisible():
+            self._anim.stop()
+            self._pos = end
+            self.update()
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._pos)
+        self._anim.setEndValue(end)
+        self._anim.start()
+
+    def showEvent(self, e):
+        if self._anim.state() != QVariantAnimation.State.Running:
+            self._pos = 1.0 if self.isChecked() else 0.0
+        super().showEvent(e)
+
+    def sizeHint(self):
+        fm = self.fontMetrics()
+        w = self.W + (self.GAP + fm.horizontalAdvance(self.text()) + 2 if self.text() else 0)
+        return QSize(w, max(self.H + 6, fm.height() + 6))
+
+    def minimumSizeHint(self):
+        return QSize(self.W, self.H + 6)
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        enabled = self.isEnabled()
+        y = (self.height() - self.H) / 2
+        track = QRectF(1, y, self.W - 2, self.H)
+        off, on = QColor(C["line2"]), QColor(C["ok"])
+        t = self._pos
+        mix = QColor(int(off.red() + (on.red() - off.red()) * t), int(off.green() + (on.green() - off.green()) * t),
+                     int(off.blue() + (on.blue() - off.blue()) * t))
+        if not enabled:
+            mix.setAlpha(110)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(mix)
+        p.drawRoundedRect(track, self.H / 2, self.H / 2)
+        if self.hasFocus() and self.focusPolicy() != Qt.FocusPolicy.NoFocus:
+            p.setPen(QPen(QColor(C["accent2"]), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(track.adjusted(-2, -2, 2, 2), self.H / 2 + 2, self.H / 2 + 2)
+            p.setPen(Qt.PenStyle.NoPen)
+        d = self.H - 4
+        x = track.left() + 2 + (track.width() - 4 - d) * t
+        p.setBrush(QColor(0, 0, 0, 60))
+        p.drawEllipse(QRectF(x, y + 3, d, d))                 # soft shadow under the knob
+        p.setBrush(QColor("#ffffff") if enabled else QColor(200, 200, 205))
+        p.drawEllipse(QRectF(x, y + 2, d, d))
+        if self.text():
+            p.setPen(self.palette().color(self.foregroundRole()) if enabled else QColor(C["dim"]))
+            p.setFont(self.font())
+            r = QRectF(self.W + self.GAP, 0, self.width() - self.W - self.GAP, self.height())
+            p.drawText(r, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), self.text())
+        p.end()
 
 
 def button(text, kind=None, ico=None, tip=None):
@@ -3232,7 +3314,7 @@ class RemotePage(Page):
         self.text.setPlaceholderText("Type text into the TV…")
         self.text.returnPressed.connect(self.send_text)
         lay.addWidget(self.text)
-        self.auto = QCheckBox("Capture after each key")
+        self.auto = Toggle("Capture after each key")
         self.auto.setChecked(win.settings.value("auto_capture", "true") == "true")
         self.auto.toggled.connect(lambda v: win.settings.setValue("auto_capture", "true" if v else "false"))
         lay.addWidget(self.auto)
@@ -4046,12 +4128,12 @@ class ExtrasPage(Page):
             "later on the Themes page. This app also adds the Live TV app as a tile and a Live TV channels row, at the "
             "top or after the apps: choose below.",
             "Muted", wrap=True))
-        self.input_svc = QCheckBox("Input button opens the input switcher (Google TV, InputKeyService)")
-        self.home_svc = QCheckBox("Home button sends ALL_APPS (Xiaomi sticks, HomeKeyService)")
+        self.input_svc = Toggle("Input button opens the input switcher (Google TV, InputKeyService)")
+        self.home_svc = Toggle("Home button sends ALL_APPS (Xiaomi sticks, HomeKeyService)")
         lay.addWidget(self.input_svc)
         lay.addWidget(self.home_svc)
-        self.live_tile_b = QCheckBox("Live TV app as a tile, like the stock launcher")
-        self.live_row_b = QCheckBox("Live TV channels row")
+        self.live_tile_b = Toggle("Live TV app as a tile, like the stock launcher")
+        self.live_row_b = Toggle("Live TV channels row")
         for cb, key in ((self.live_tile_b, "live_tile"), (self.live_row_b, "live_row")):
             cb.setChecked(win.settings.value(key, "1") != "0")
             cb.toggled.connect(lambda on, k=key: self._live_switch(k, on))
@@ -4071,7 +4153,7 @@ class ExtrasPage(Page):
         self.live_pos.setEnabled(self.live_row_b.isChecked())
         lay.addWidget(hbox(self.live_tile_b, None, label("Icon", "Muted"), self.live_icon))
         lay.addWidget(hbox(self.live_row_b, None, label("Position", "Muted"), self.live_pos))
-        self.tile_menu_b = QCheckBox("Hold OK on an app opens a menu: Open, Move (arrows), add to the dock, App info")
+        self.tile_menu_b = Toggle("Hold OK on an app opens a menu: Open, Move (arrows), add to the dock, App info")
         self.tile_menu_b.setChecked(win.settings.value("tile_menu", "1") != "0")
         self.tile_menu_b.toggled.connect(lambda on: win.settings.setValue("tile_menu", "1" if on else "0"))
         lay.addWidget(self.tile_menu_b)
@@ -4081,7 +4163,7 @@ class ExtrasPage(Page):
         self.prep = button("Prepare tools", None, "box", "Creates tools\\venv with adb-shell, which the build "
                                                          "script uses")
         self.build = button("Build & install", "Primary", "tv")
-        self.clean = QCheckBox("Clean build")
+        self.clean = Toggle("Clean build")
         self.clean.setToolTip("Deletes the previous build first, so everything is compiled again and the TV can only "
                               "get the fresh launcher. Takes a minute or two longer.")
         self.clean.setChecked(win.settings.value("clean_build", "1") == "1")
@@ -5013,11 +5095,11 @@ class ThemesPage(Page):
                                                      "launcher's; OK tunes the channel. Needs the launcher built by "
                                                      "this app (Extras → Build & install)."),
         ]:
-            cb = QCheckBox(text)
+            cb = Toggle(text)
             cb.setToolTip(tip)
             self.switches[key] = cb
             sw.addWidget(cb)
-        self.live_tile = QCheckBox("Live TV app as a tile")
+        self.live_tile = Toggle("Live TV app as a tile")
         self.live_tile.setToolTip("The launcher hides the Live TV app because the Inputs menu (top right) already has "
                                   "it. Tick to show it among the apps too.")
         sw.addWidget(self.live_tile)
@@ -5470,7 +5552,7 @@ class ProfileApplyDialog(Dialog):
         self.checks = {}
 
         def add(key, text, enabled=True, tip=""):
-            cb = QCheckBox(text)
+            cb = Toggle(text)
             cb.setChecked(enabled)
             cb.setEnabled(enabled)
             cb.setToolTip(tip)
@@ -5828,7 +5910,7 @@ class FinishPage(Page):
                      "Restart the TV",
                      "If the network runs over a USB Ethernet adapter: unplug and replug it, and check the TV is on "
                      "Ethernet again (not Wi-Fi)"]:
-            cb = QCheckBox(text)
+            cb = Toggle(text)
             self.steps.append(cb)
             lay.addWidget(cb)
         self.check_port = button("Check the port is closed", "Primary", "lock")
@@ -6184,7 +6266,7 @@ class AboutDialog(QDialog):
         lay.addWidget(lic)
 
         st = QSettings("CleanYourTV", "CleanYourTV")
-        auto = QCheckBox("Connect to my TV by itself when the app starts")
+        auto = Toggle("Connect to my TV by itself when the app starts")
         auto.setToolTip("Tries the last TV, or the only one a network scan finds. Untick it when you work on a TV "
                         "other than your usual one.")
         auto.setChecked(st.value("auto_connect", "true") == "true")
