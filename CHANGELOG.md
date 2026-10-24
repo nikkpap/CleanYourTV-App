@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3
+
+Backup → Save profile + apps: one <name>.zip with the profile (.cytv), the apps you pick (.apk/.apks) and the launcher switches. Apply to TV on such a zip sets a box of the same kind up in order: apps, launcher build, then the profile (its parts chosen, packages in batches with screenshots, backup and undo first).
+
 ## 1.3.2
 
 Debloat: a package Android protects (devicelockcontroller on Android 14 and the like) is reported as that package, with pm's reason, instead of "this firmware refuses to disable packages".

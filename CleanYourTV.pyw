@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.2.pyw            normal mode
-    python CleanYourTV_v1.3.2.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.3.pyw            normal mode
+    python CleanYourTV_v1.3.3.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.3  Backup → Save profile + apps: one <name>.zip with the profile (.cytv), the apps you pick (.apk/.apks) and
+         the launcher switches. Apply to TV on such a zip sets a box of the same kind up in order: apps, launcher
+         build, then the profile (its parts chosen, packages in batches with screenshots, backup and undo first).
   1.3.2  Debloat: a package Android protects (devicelockcontroller on Android 14 and the like) is reported as that
          package, with pm's reason, instead of "this firmware refuses to disable packages".
   1.3.1  Debloat: Report, the enabled packages by category with the tested-list count and note, ready to copy.
@@ -70,7 +73,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2713,12 +2716,16 @@ class BackupPage(Page):
         self.prof_name = QLineEdit()
         self.prof_name.setPlaceholderText("Profile name, e.g. Living room box")
         self.prof_save = button("Save profile", "Primary", "save")
-        lay.addWidget(hbox(self.prof_name, self.prof_save))
+        self.prof_bundle = button("Save profile + apps", None, "box",
+                                  "One .zip with the profile and the apps you installed, to set up another box "
+                                  "of the same kind in one go")
+        lay.addWidget(hbox(self.prof_name, self.prof_save, self.prof_bundle))
         self.profiles = QListWidget()
         self.profiles.setMinimumHeight(130)
         lay.addWidget(self.profiles)
         self.prof_apply = button("Apply to TV", "Primary", "check")
-        self.prof_import = button("Import…", None, "folder", "Copy a .cytv file into your profiles")
+        self.prof_import = button("Import…", None, "folder", "Copy a .cytv profile or a .zip bundle into your "
+                                                             "profiles")
         self.prof_open = button("Open folder", "Ghost", "folder")
         self.prof_del = button("Delete", "Ghost", "x")
         lay.addWidget(hbox(self.prof_apply, self.prof_import, None, self.prof_open, self.prof_del))
@@ -2727,6 +2734,11 @@ class BackupPage(Page):
         self.body.addWidget(c)
         self.body.addStretch(1)
         self.prof_save.clicked.connect(self.save_profile)
+        self.prof_bundle.clicked.connect(self.save_bundle)
+        self.bundle_sig = ProgressSignal()
+        self.bundle_sig.step.connect(lambda d, t, w: self.prof_msg.set(
+            (f"Copying {w}… {d / 1048576:.1f} of {t / 1048576:.1f} MB" if t > 1000 else
+             f"Installing app {min(d + 1, t)} of {t}: {w}…") if w else "Apps done.", "info"))
         self.prof_apply.clicked.connect(self.apply_profile)
         self.prof_import.clicked.connect(self.import_profile)
         self.prof_open.clicked.connect(lambda: (PROFILE_DIR.mkdir(parents=True, exist_ok=True), open_path(PROFILE_DIR)))
@@ -2768,17 +2780,23 @@ class BackupPage(Page):
 
     def refresh_profiles(self):
         self.profiles.clear()
-        files = sorted(PROFILE_DIR.glob("*.cytv"), key=lambda p: p.stat().st_mtime, reverse=True) \
-            if PROFILE_DIR.is_dir() else []
+        files = sorted(list(PROFILE_DIR.glob("*.cytv")) + list(PROFILE_DIR.glob("*.zip")),
+                       key=lambda p: p.stat().st_mtime, reverse=True) if PROFILE_DIR.is_dir() else []
         import zipfile
         for f in files:
             prof = {}
             try:
-                with zipfile.ZipFile(f) as z:
-                    prof = json.loads(z.read("profile.json").decode("utf-8"))
+                apps = ""
+                if f.suffix == ".zip":
+                    meta, prof = read_bundle(f)
+                    apps = f"   ·   📦 {len(meta.get('apps', []))} apps"
+                else:
+                    with zipfile.ZipFile(f) as z:
+                        prof = json.loads(z.read("profile.json").decode("utf-8"))
                 txt = (f"{prof.get('name', f.stem)}   ·   {(prof.get('tv') or {}).get('model') or '?'}   ·   "
                        f"{len(prof.get('disabled_packages', []))} packages   ·   "
-                       f"theme: {((prof.get('theme') or {}).get('from')) or 'none'}   ·   {prof.get('created', '')}")
+                       f"theme: {((prof.get('theme') or {}).get('from')) or 'none'}{apps}   ·   "
+                       f"{prof.get('created', '')}")
             except Exception:
                 txt = f"{f.stem}   ·   (unreadable)"
             it = QListWidgetItem(txt)
@@ -2814,11 +2832,12 @@ class BackupPage(Page):
                 on_done=lambda: self.prof_save.setEnabled(True))
 
     def import_profile(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Import profile", str(Path.home()), "CleanYourTV profile (*.cytv)")
+        f, _ = QFileDialog.getOpenFileName(self, "Import profile", str(Path.home()),
+                                           "CleanYourTV profile or bundle (*.cytv *.zip)")
         if not f:
             return
         try:
-            read_profile(f)
+            read_bundle(f) if f.lower().endswith(".zip") else read_profile(f)
             PROFILE_DIR.mkdir(parents=True, exist_ok=True)
             if Path(f).resolve().parent != PROFILE_DIR.resolve():
                 shutil.copyfile(f, PROFILE_DIR / Path(f).name)
@@ -2837,11 +2856,131 @@ class BackupPage(Page):
                 self.prof_msg.set(str(e), "bad")
             self.refresh_profiles()
 
-    def apply_profile(self):
-        p = self._current_profile()
+    # ---- profile + apps bundles ---------------------------------------------------------------------------------
+    def save_bundle(self):
+        """Save profile, then pick the apps to put in with it: one .zip for the next box of this kind."""
+        if not self.need_tv():
+            return
+        name = self.prof_name.text().strip() or f"{TV.info.get('model') or 'TV'} setup"
+        dest = PROFILE_DIR / f"{_safe_name(name)}.zip"
+        if dest.exists() and not ask(self, "Replace bundle?", f"<b>{dest.name}</b> exists. Replace it with this TV's "
+                                     "current setup and apps?", "Replace"):
+            return
+        theme = self.win.settings.value(f"theme_applied/{TV.host}", "") or ""
+        ex = next(p for p in self.win.page_list if isinstance(p, ExtrasPage))
+        extras = {"model": ex.model_key(TV.info or {}), "switches": ex.extras_now()}
+        self.prof_bundle.setEnabled(False)
+        self.prof_msg.set("Reading the TV…", "info")
+
+        def picked(res):
+            cytv, apps = res
+            d = PickAppsDialog(self, apps, "")
+            d.setWindowTitle("Apps to put in the bundle")
+            if d.dest.parentWidget() is not d:   # the Save to row: the apps go into the bundle instead
+                d.dest.parentWidget().hide()
+            d.ticked = {p for p, sysapp in apps if not sysapp and p != OUR_LAUNCHER}
+            d.fill()
+            d.ok.setText("Make the bundle")
+            if d.exec() != QDialog.DialogCode.Accepted:
+                self.prof_bundle.setEnabled(True)
+                self.prof_msg.set(f"Profile saved as <b>{cytv.name}</b>; no bundle made.", "info")
+                self.refresh_profiles()
+                return
+            import tempfile
+            work = Path(tempfile.mkdtemp(prefix="cyt-bundle-"))
+
+            def build():
+                try:
+                    saved, notes = pull_apps(sorted(d.ticked), work, self.bundle_sig) if d.ticked else ([], [])
+                    out = make_bundle(cytv, saved, dest, extras)
+                    cytv.unlink()   # it lives inside the bundle now
+                    return out, saved, notes
+                finally:
+                    shutil.rmtree(work, ignore_errors=True)
+
+            run_job(build, on_result=lambda r: (self.prof_msg.set(
+                f"Saved <b>{r[0].name}</b>: the profile and {len(r[1])} app{'s' if len(r[1]) != 1 else ''}"
+                + (f" ({r[0].stat().st_size / 1048576:.0f} MB)" if r[0].exists() else "") + f", in {PROFILE_DIR}."
+                + ("<br>" + "<br>".join(r[2]) if r[2] else ""), "ok"), self.refresh_profiles()),
+                    on_error=lambda m: self.prof_msg.set(f"Could not make the bundle: {m}", "bad"),
+                    on_done=lambda: self.prof_bundle.setEnabled(True))
+
+        run_job(lambda: (save_profile(name, theme), tv_apps(True)), on_result=picked,
+                on_error=lambda m: (self.prof_msg.set(f"Could not save the profile: {m}", "bad"),
+                                    self.prof_bundle.setEnabled(True)))
+
+    def setup_from_bundle(self, path):
+        """Apps, then the launcher, then the profile: a box of the same kind set up from one file."""
+        try:
+            meta, prof = read_bundle(path)
+        except Exception as e:
+            self.prof_msg.set(f"Could not read the bundle: {e}", "bad")
+            return
+        apps = meta.get("apps", [])
+        has_launcher = launcher_installed()
+        steps = []
+        if apps:
+            steps.append(f"install {len(apps)} app{'s' if len(apps) != 1 else ''}: " + ", ".join(apps[:5]) +
+                         (" …" if len(apps) > 5 else ""))
+        steps.append("the launcher is already installed: kept" if has_launcher else
+                     "build and install the launcher, with the switches saved in the bundle")
+        steps.append(f"apply the profile <b>{prof.get('name')}</b>: you choose its parts, packages go in batches "
+                     "with a screenshot after each")
+        if not ask(self, "Set up this box from the bundle?",
+                   "In this order:<br>" + "<br>".join(f"{i + 1}. {t}" for i, t in enumerate(steps)) +
+                   "<br><br>A full backup and an undo record are saved before the first package changes.",
+                   "Set it up"):
+            return
+        import tempfile
+        work = Path(tempfile.mkdtemp(prefix="cyt-setup-"))
+        cytv, files = unpack_bundle(path, work)
+        ex = next(p for p in self.win.page_list if isinstance(p, ExtrasPage))
+        sw = (meta.get("extras") or {}).get("switches")
+
+        def profile_step(_code=0):
+            if _code not in (0, None):
+                self.win.go("Backup")
+                self.prof_msg.set("The launcher build did not finish, so the profile was not applied. Fix the build "
+                                  "on Extras, then press Apply to TV here again: installed apps are not redone.",
+                                  "bad")
+                return
+            self.win.go("Backup")
+            self.apply_profile(cytv)
+
+        def launcher_step(results):
+            bad = [f"{n}: {e}" for n, e in results if e]
+            if results:
+                log(f"bundle apps: {len(results) - len(bad)} installed, {len(bad)} not", "ok" if not bad else "warn")
+                self._bundle_done = getattr(self, "_bundle_done", set()) | {str(path)}
+            if bad:
+                self.prof_msg.set("Some apps were not installed:<br>" + "<br>".join(bad[:6]), "warn")
+            if sw:
+                ex.set_extras(sw)
+                ex.save_extras()
+            if has_launcher:
+                profile_step()
+                return
+            ex.on_build_finished = profile_step
+            self.win.go("Extras")
+            ex.build_install()
+            if DEMO:
+                QTimer.singleShot(300, lambda: (setattr(ex, "on_build_finished", None), profile_step(0)))
+
+        if files and str(path) not in getattr(self, "_bundle_done", set()):
+            self.prof_msg.set(f"Installing {len(files)} apps…", "info")
+            run_job(install_bundle_apps, files, self.bundle_sig, on_result=launcher_step,
+                    on_error=lambda m: self.prof_msg.set(f"Apps stopped: {m}", "bad"))
+        else:
+            launcher_step([])
+
+    def apply_profile(self, path=None):
+        p = Path(path) if path else self._current_profile()
         if not p:
             return
         if not self.need_tv():
+            return
+        if p.suffix == ".zip":
+            self.setup_from_bundle(p)
             return
         try:
             prof, theme = read_profile(p)
@@ -5429,6 +5568,10 @@ class ExtrasPage(Page):
                 run_job(check, on_result=checked)
             self.refresh()
             BUS.packages_changed.emit()
+            hook = getattr(self, "on_build_finished", None)   # a bundle set-up waits for the launcher
+            if hook:
+                self.on_build_finished = None
+                QTimer.singleShot(5000 if code == 0 else 0, lambda: hook(code))
 
         cvte = bool(TV.info.get("cvte"))
         if cvte:
@@ -6305,6 +6448,78 @@ def read_profile(path):
     prof["disabled_packages"] = pk
     theme = out / "theme"
     return prof, (theme if (theme / "config.json").is_file() else None)
+
+
+# A profile bundle: <name>.zip = profile.cytv + apps/*.apk|*.apks + bundle.json (what is inside, and the launcher
+# switches for that model), so a second box of the same kind is set up from one file.
+BUNDLE_APP_RE = re.compile(r"apps/[A-Za-z0-9_.()+-]+\.apks?")
+
+
+def read_bundle(path):
+    """(bundle.json, profile dict) of a bundle, without unpacking it."""
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        if "bundle.json" not in names or "profile.cytv" not in names:
+            raise RuntimeError("not a CleanYourTV profile bundle (bundle.json and profile.cytv)")
+        meta = json.loads(z.read("bundle.json").decode("utf-8"))
+        with zipfile.ZipFile(io.BytesIO(z.read("profile.cytv"))) as inner:
+            prof = json.loads(inner.read("profile.json").decode("utf-8"))
+    meta["apps"] = [a for a in meta.get("apps", []) if BUNDLE_APP_RE.fullmatch("apps/" + str(a))]
+    return meta, prof
+
+
+def make_bundle(cytv, apps, dest, extras=None):
+    """Writes <dest>.zip from a .cytv, the app files and the launcher switches."""
+    import zipfile
+    dest = Path(dest)
+    tmp = dest.with_suffix(".zip.part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:   # .apk files are compressed already
+        z.write(cytv, "profile.cytv")
+        names = []
+        for f in apps:
+            f = Path(f)
+            if BUNDLE_APP_RE.fullmatch("apps/" + f.name):
+                z.write(f, "apps/" + f.name)
+                names.append(f.name)
+        z.writestr("bundle.json", json.dumps({
+            "format": "cleanyourtv-bundle", "app": f"{APP_NAME} {APP_VERSION}",
+            "created": time.strftime("%Y-%m-%d %H:%M"), "apps": names, "extras": extras or {}}, indent=2))
+    tmp.replace(dest)
+    return dest
+
+
+def unpack_bundle(path, out):
+    """profile.cytv and the app files into out; returns (cytv path, app files)."""
+    import zipfile
+    out = Path(out)
+    shutil.rmtree(out, ignore_errors=True)
+    (out / "apps").mkdir(parents=True, exist_ok=True)
+    apps = []
+    with zipfile.ZipFile(path) as z:
+        (out / "profile.cytv").write_bytes(z.read("profile.cytv"))
+        for n in z.namelist():
+            if BUNDLE_APP_RE.fullmatch(n):
+                t = out / n
+                t.write_bytes(z.read(n))
+                apps.append(t)
+    return out / "profile.cytv", apps
+
+
+def install_bundle_apps(files, sig=None):
+    """Installs each app of a bundle on its own, so one that the TV refuses does not stop the others."""
+    results = []
+    for i, f in enumerate(files):
+        if sig:
+            sig.step.emit(i, len(files), Path(f).name)
+        try:
+            install_apks([str(f)])
+            results.append((Path(f).name, ""))
+        except Exception as e:
+            results.append((Path(f).name, str(e)))
+    if sig:
+        sig.step.emit(len(files), len(files), "")
+    return results
 
 
 def apply_profile_settings(prof, groups):
