@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2
+
+After Build & install the TV goes Home once more, so the Live TV row reads the channels with the permission just granted. Launcher report: "applied" when config.xml only carries this app's switch values. Tested: Sony Bravia (com.sony.dtv.tvx) gives the row its channels.
+
 ## 1.2.1
 
 Works with the toolkit's newest launcher (single-row Home): the Live TV row and the Open entry were left out of builds since that change. A build without them now says so in a dialog, not only in the log.

@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.1.pyw            normal mode
-    python CleanYourTV_v1.2.1.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.2.pyw            normal mode
+    python CleanYourTV_v1.2.2.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.2  After Build & install the TV goes Home once more, so the Live TV row reads the channels with the permission
+         just granted (it showed only after the next Home press). Launcher report: "applied" when config.xml only
+         carries this app's switch values.
   1.2.1  Works with the toolkit's newest launcher (single-row Home): the Live TV row and the Open entry were left out
          of builds since that change. A build without them now says so in a dialog, not only in the log.
   1.2.0  The remote's TV button opens the TV's Live TV app directly (Sony com.sony.dtv.tvx and the others the app
@@ -48,7 +51,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -4045,7 +4048,12 @@ def launcher_report():
     sec("This computer")
     out.append(f"toolkit launcher: {LAUNCHER}")
     try:
-        out.append(f"Live TV row patch: {livetv_state(LAUNCHER, LIVETV_EDITS, LIVETV_FILES)}")
+        state = livetv_state(LAUNCHER, LIVETV_EDITS, LIVETV_FILES)
+        if state[0] == "mixed":   # config.xml carries this app's switch values, which the check does not expect
+            code = livetv_state(LAUNCHER, [e for e in LIVETV_EDITS if not e[0].endswith("config.xml")], LIVETV_FILES)
+            if code[0] == "applied":
+                state = ("applied", "config.xml set by this app's switches")
+        out.append(f"Live TV row patch: {state}")
     except Exception as e:
         out.append(f"Live TV row patch: unreadable ({e})")
     out.append(f"config.xml: {config_xml_arrays()}")
@@ -4862,6 +4870,8 @@ class ExtrasPage(Page):
                 def check():
                     if ok:
                         grant_livetv()
+                        # The launcher started before the grant and found no channels: Home again reads them.
+                        TV.sh("input keyevent KEYCODE_HOME", quiet=True)
                     notes = sync_live_on_tv(want_row and ok, want_tile, live_pkg, live_banner(want_icon), want_pos,
                                             {"tile_menu": want_menu}, want_tv_key)
                     time.sleep(0 if DEMO else 4)
