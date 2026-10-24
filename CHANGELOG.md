@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.5
+
+About: keep the toolkit as zip files (toolkit.<date>.<version>.zip in Documents/CleanYourTV toolkit), the newest for use and the one before as a backup; Use the previous one, with updates paused until resumed.
+
 ## 1.2.4
 
 Live TV row: hold OK on a channel to hide it, move it (Left/Right, OK places it) or show the hidden ones again. The launcher keeps these by channel number and name, so they survive reboots.

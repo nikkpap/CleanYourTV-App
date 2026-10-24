@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.4.pyw            normal mode
-    python CleanYourTV_v1.2.4.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.5.pyw            normal mode
+    python CleanYourTV_v1.2.5.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.5  About: keep the toolkit as zip files (toolkit.<date>.<version>.zip in Documents/CleanYourTV toolkit),
+         the newest for use and the one before as a backup; Use the previous one, with updates paused until resumed.
   1.2.4  Live TV row: hold OK on a channel to hide it, move it (Left/Right, OK places it) or show the hidden ones
          again. The launcher keeps these by channel number and name, so they survive reboots.
   1.2.3  Hold-OK menu: Uninstall, for apps you installed (not the TV's own apps); Android asks before removing.
@@ -54,7 +56,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -292,6 +294,7 @@ TOOLKIT_VERSION = TOOLKIT_HOME / "version.json"
 LATEST_SHA_URL = "https://api.github.com/repos/Gathin23/cleanyourtv/commits/main"
 # Kept across a toolkit update: the ADB key the TV already trusts, the build venv and the build state.
 KEEP_ON_UPDATE = ["tools/adbkey", "tools/venv", "launcher/local.properties", "launcher/.gradle", "launcher/app/build"]
+TOOLKIT_ZIPS_KEEP = 2    # the newest toolkit zip for use and the one before as a backup (About)
 SPLASH_MIN_STEP = 0.45   # seconds each step stays on screen, so the user can read it
 SPLASH_MIN_TOTAL = 2.6
 
@@ -386,11 +389,8 @@ class StartupWorker(QThread):
 
     def fetch_toolkit(self, p0, p1, sha=None):
         """Download main.zip and swap it in. The old copy stays until the new one is complete."""
-        import zipfile
         TOOLKIT_HOME.mkdir(parents=True, exist_ok=True)
         tmp = TOOLKIT_HOME / "download.zip"
-        stage = TOOLKIT_HOME / ".staging"
-        shutil.rmtree(stage, ignore_errors=True)
         try:
             with _http(REPO_ZIP, timeout=30) as r, open(tmp, "wb") as f:
                 total, done = int(r.headers.get("Content-Length") or 0), 0
@@ -404,47 +404,17 @@ class StartupWorker(QThread):
                     self.say(p0 + (p1 - p0) * 0.8 * frac, "Downloading the toolkit",
                              f"{done / 1e6:.1f} MB" + (f" of {total / 1e6:.1f} MB" if total else ""))
             self.say(p0 + (p1 - p0) * 0.85, "Unpacking the toolkit")
-            dest = stage.resolve()
-            with zipfile.ZipFile(tmp) as z:
-                for m in z.infolist():
-                    t = (dest / m.filename).resolve()
-                    if t != dest and dest not in t.parents:
-                        raise RuntimeError(f"unexpected path in the archive: {m.filename}")
-                z.extractall(dest)
-            new = stage / "cleanyourtv-main"
-            if not _is_toolkit(new):
-                raise RuntimeError("the download did not contain tools/tv.py")
-            old = TOOLKIT_MANAGED
-            if old.exists():
-                for rel in KEEP_ON_UPDATE:
-                    src = old / rel
-                    if src.exists():
-                        (new / rel).parent.mkdir(parents=True, exist_ok=True)
-                        shutil.rmtree(new / rel, ignore_errors=True)
-                        shutil.move(str(src), str(new / rel))
-                retired = TOOLKIT_HOME / f".old-{int(time.time())}"
-                try:
-                    old.rename(retired)
-                except OSError as e:
-                    # A file in use (a build still running): put the kept items back, try next launch.
-                    for rel in KEEP_ON_UPDATE:
-                        if (new / rel).exists() and not (old / rel).exists():
-                            shutil.move(str(new / rel), str(old / rel))
-                    raise RuntimeError(f"the toolkit is in use, update postponed ({e})")
-                new.rename(old)
-                shutil.rmtree(retired, ignore_errors=True)
-            else:
-                new.rename(old)
-            if sha:
-                TOOLKIT_VERSION.write_text(json.dumps({"sha": sha, "updated": time.strftime("%Y-%m-%d %H:%M")}))
+            old = install_toolkit_zip(tmp, sha)
+            try:
+                keep_toolkit_zip(tmp, sha)
+            except Exception:
+                pass   # a full disk or a locked folder must not stop the app
             return old
         finally:
-            for p in (tmp,):
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-            shutil.rmtree(stage, ignore_errors=True)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     def latest_sha(self):
         try:
@@ -480,6 +450,9 @@ class StartupWorker(QThread):
         if DEMO:
             self.pause(s)
             self.say(0.82, "Up to date", "demo mode: nothing is downloaded")
+        elif managed and QSettings("CleanYourTV", "CleanYourTV").value("toolkit_hold", ""):
+            held = QSettings("CleanYourTV", "CleanYourTV").value("toolkit_hold", "")
+            self.say(0.84, "Using the previous toolkit", f"version {held[:7]}, updates paused (About)")
         elif managed:
             latest = self.latest_sha()
             try:
@@ -514,6 +487,122 @@ class StartupWorker(QThread):
         if left > 0:
             time.sleep(left)
         return repo
+
+
+def install_toolkit_zip(zip_path, sha=None):
+    """Unpack a toolkit zip (GitHub's main.zip layout) and swap it in for the managed copy, keeping the ADB key,
+    the build venv and the build state. The old copy stays until the new one is complete."""
+    import zipfile
+    TOOLKIT_HOME.mkdir(parents=True, exist_ok=True)
+    stage = TOOLKIT_HOME / ".staging"
+    shutil.rmtree(stage, ignore_errors=True)
+    try:
+        dest = stage.resolve()
+        with zipfile.ZipFile(zip_path) as z:
+            for m in z.infolist():
+                t = (dest / m.filename).resolve()
+                if t != dest and dest not in t.parents:
+                    raise RuntimeError(f"unexpected path in the archive: {m.filename}")
+            z.extractall(dest)
+        new = stage / "cleanyourtv-main"
+        if not _is_toolkit(new):
+            raise RuntimeError("the zip did not contain the toolkit (tools/tv.py)")
+        old = TOOLKIT_MANAGED
+        if old.exists():
+            for rel in KEEP_ON_UPDATE:
+                src = old / rel
+                if src.exists():
+                    (new / rel).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.rmtree(new / rel, ignore_errors=True)
+                    shutil.move(str(src), str(new / rel))
+            retired = TOOLKIT_HOME / f".old-{int(time.time())}"
+            try:
+                old.rename(retired)
+            except OSError as e:
+                # A file in use (a build still running): put the kept items back, try next launch.
+                for rel in KEEP_ON_UPDATE:
+                    if (new / rel).exists() and not (old / rel).exists():
+                        shutil.move(str(new / rel), str(old / rel))
+                raise RuntimeError(f"the toolkit is in use, update postponed ({e})")
+            new.rename(old)
+            shutil.rmtree(retired, ignore_errors=True)
+        else:
+            new.rename(old)
+        if sha:
+            TOOLKIT_VERSION.write_text(json.dumps({"sha": sha, "updated": time.strftime("%Y-%m-%d %H:%M")}))
+        return old
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def _documents():
+    """The Documents folder Windows really uses: OneDrive moves it, so ~/Documents may not be it."""
+    from PyQt6.QtCore import QStandardPaths
+    d = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+    return Path(d) if d else Path.home() / "Documents"
+
+
+def toolkit_archive_dir():
+    return _documents() / "CleanYourTV toolkit"
+
+
+def toolkit_zips():
+    """The kept toolkit zips, newest first."""
+    d = toolkit_archive_dir()
+    if not d.is_dir():
+        return []
+    return sorted(d.glob("toolkit.*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def toolkit_zip_sha(path):
+    m = re.match(r"toolkit\.[0-9-]+\.([0-9a-f]{7,40})\.zip$", Path(path).name)
+    return m.group(1) if m else None
+
+
+def keep_toolkit_zip(src_zip, sha):
+    """With the About switch on: a copy of a toolkit zip as toolkit.<date>.<version>.zip in Documents, the newest
+    TOOLKIT_ZIPS_KEEP kept. Returns the copy, or None when the switch is off."""
+    if QSettings("CleanYourTV", "CleanYourTV").value("keep_toolkit_zips", "false") != "true":
+        return None
+    d = toolkit_archive_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    ver = (sha or "unknown")[:7]
+    for p in d.glob(f"toolkit.*.{ver}.zip"):   # the same version again: one copy is enough
+        p.unlink()
+    target = d / f"toolkit.{time.strftime('%Y-%m-%d')}.{ver}.zip"
+    shutil.copyfile(src_zip, target)
+    for old in toolkit_zips()[TOOLKIT_ZIPS_KEEP:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return target
+
+
+def zip_current_toolkit():
+    """The toolkit in use as a zip in the same layout as GitHub's, for the first copy after the switch goes on.
+    Leaves out what is this PC's own: the ADB key, the venv and the build state."""
+    import zipfile
+    import tempfile
+    root = TOOLKIT_MANAGED
+    if not _is_toolkit(root):
+        raise RuntimeError("no toolkit managed by this app on this PC")
+    try:
+        sha = json.loads(TOOLKIT_VERSION.read_text()).get("sha")
+    except (OSError, ValueError):
+        sha = None
+    skip = [root / r for r in KEEP_ON_UPDATE] + [root / "launcher" / ".livetv-orig"]
+    fd, tmp = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in root.rglob("*"):
+                if not f.is_file() or "__pycache__" in f.parts or any(f == s or s in f.parents for s in skip):
+                    continue
+                z.write(f, "cleanyourtv-main/" + f.relative_to(root).as_posix())
+        return keep_toolkit_zip(tmp, sha)
+    finally:
+        os.unlink(tmp)
 
 
 class SplashScreen(QWidget):
@@ -708,13 +797,6 @@ else:
 DATA = Path.home() / ".cleanyourtv"
 GUI_LISTS = DATA / "gui-lists"
 SHOTS = DATA / "shots"
-
-
-def _documents():
-    """The Documents folder Windows really uses: OneDrive moves it, so ~/Documents may not be it."""
-    from PyQt6.QtCore import QStandardPaths
-    d = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
-    return Path(d) if d else Path.home() / "Documents"
 
 
 DEFAULT_BACKUPS = _documents() / "CleanYourTV backups"
@@ -6574,6 +6656,43 @@ class AboutDialog(QDialog):
         auto.toggled.connect(lambda v: st.setValue("auto_connect", "true" if v else "false"))
         lay.addWidget(auto)
 
+        # Toolkit zips: the newest for use and the one before as a backup
+        keep = Toggle("Keep the toolkit as zip files on this PC: the newest and the one before")
+        keep.setToolTip(f"Every toolkit download is also saved as toolkit.<date>.<version>.zip in "
+                        f"{toolkit_archive_dir()}. Only the last {TOOLKIT_ZIPS_KEEP} are kept.")
+        keep.setChecked(st.value("keep_toolkit_zips", "false") == "true")
+        lay.addWidget(keep)
+        self.zips = QLabel()
+        self.zips.setWordWrap(True)
+        self.zips.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(self.zips)
+        zrow = QHBoxLayout()
+        self.zip_open = button("Open folder", None, "folder")
+        self.zip_open.clicked.connect(lambda: (toolkit_archive_dir().mkdir(parents=True, exist_ok=True),
+                                               open_path(toolkit_archive_dir())))
+        self.zip_prev = button("Use the previous one", None, "undo",
+                               "Puts the older kept toolkit in place and pauses toolkit updates until you resume them")
+        self.zip_prev.clicked.connect(self.use_previous)
+        self.zip_resume = button("Resume updates", None, "refresh", "The newest toolkit comes back at the next start")
+        self.zip_resume.clicked.connect(self.resume_updates)
+        zrow.addWidget(self.zip_open)
+        zrow.addWidget(self.zip_prev)
+        zrow.addWidget(self.zip_resume)
+        zrow.addStretch(1)
+        lay.addLayout(zrow)
+
+        def keep_toggled(v):
+            st.setValue("keep_toolkit_zips", "true" if v else "false")
+            if v and not toolkit_zips() and _is_toolkit(TOOLKIT_MANAGED):
+                self.zips.setText(f"<span style='color:{C['muted']}'>Saving the toolkit in use…</span>")
+                run_job(zip_current_toolkit, pool=NET_POOL, on_result=lambda _: self.show_zips(),
+                        on_error=lambda m: self.zips.setText(f"<span style='color:{C['bad']}'>{m}</span>"))
+            else:
+                self.show_zips()
+
+        keep.toggled.connect(keep_toggled)
+        self.show_zips()
+
         row = QHBoxLayout()
         where = QLabel(f"<span style='color:{C['dim']}'>Toolkit in use: {REPO}</span>")
         where.setWordWrap(True)
@@ -6589,6 +6708,56 @@ class AboutDialog(QDialog):
         ok.clicked.connect(self.accept)
         row.addWidget(ok)
         lay.addLayout(row)
+
+
+    # (AboutDialog) kept toolkit zips
+    def show_zips(self):
+        st = QSettings("CleanYourTV", "CleanYourTV")
+        zips = toolkit_zips()
+        held = st.value("toolkit_hold", "")
+        on = st.value("keep_toolkit_zips", "false") == "true"
+        lines = [f"{'▶ ' if i == 0 else '◦ '}{z.name}  <span style='color:{C['dim']}'>"
+                 f"{z.stat().st_size / 1048576:.1f} MB{' · newest' if i == 0 else ' · backup'}</span>"
+                 for i, z in enumerate(zips)]
+        txt = "<br>".join(lines) if lines else ("No toolkit zip yet: the next download is saved." if on else
+                                                 "Off: toolkit downloads are not kept.")
+        if held:
+            txt += f"<br><span style='color:{C['warn']}'>Using the previous toolkit ({held[:7]}): updates paused.</span>"
+        self.zips.setText(f"<span style='color:{C['muted']}'>{txt}</span>")
+        self.zip_prev.setEnabled(len(zips) >= 2 and not held)
+        self.zip_resume.setVisible(bool(held))
+
+    def use_previous(self):
+        zips = toolkit_zips()
+        if len(zips) < 2:
+            return
+        prev = zips[1]
+        if not ask(self, "Use the previous toolkit?",
+                   f"<b>{prev.name}</b> replaces the toolkit in use. Your ADB key, the build tools and the launcher "
+                   "build state stay. Toolkit updates pause until you press Resume updates here.<br><br>Then build "
+                   "the launcher again on Extras if you want it from this toolkit.", "Use it"):
+            return
+        self.zip_prev.setEnabled(False)
+        sha = toolkit_zip_sha(prev) or "previous"
+
+        def done(_):
+            QSettings("CleanYourTV", "CleanYourTV").setValue("toolkit_hold", sha)
+            self.show_zips()
+
+        run_job(install_toolkit_zip, prev, sha, pool=NET_POOL, on_result=done,
+                on_error=lambda m: (self.zips.setText(f"<span style='color:{C['bad']}'>{m}</span>"),
+                                    self.zip_prev.setEnabled(True)))
+
+    def resume_updates(self):
+        st = QSettings("CleanYourTV", "CleanYourTV")
+        st.remove("toolkit_hold")
+        try:   # forget the held version, so the next start sees the newest as new
+            TOOLKIT_VERSION.write_text(json.dumps({"sha": "", "updated": time.strftime("%Y-%m-%d %H:%M")}))
+        except OSError:
+            pass
+        self.show_zips()
+        self.zips.setText(self.zips.text() + f"<br><span style='color:{C['ok']}'>The newest toolkit is downloaded "
+                                             "at the next start.</span>")
 
 
 class MainWindow(QMainWindow):
