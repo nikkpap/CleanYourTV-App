@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.7
+
+The Live TV tile and row follow the TV's own Live TV app, found on connect (Sony com.sony.dtv.tvx, TCL, MediaTek and others), and the build writes it into the launcher's live_tv_package.
+
 ## 1.1.6
 
 On/off switches in the iPhone style instead of checkboxes, everywhere in the app.

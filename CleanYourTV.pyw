@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.1.6.pyw            normal mode
-    python CleanYourTV_v1.1.6.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.1.7.pyw            normal mode
+    python CleanYourTV_v1.1.7.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.1.7  The Live TV tile and row follow the TV's own Live TV app, found on connect (Sony com.sony.dtv.tvx, TCL,
+         MediaTek and others), and the build writes it into the launcher's live_tv_package.
   1.1.6  On/off switches in the iPhone style instead of checkboxes, everywhere in the app.
   1.1.5  Hold OK on an app opens a menu like the stock launcher's: Open, Move (arrows), dock, App info
          (the launcher's tile_menu, with Open added; Greek labels). A switch on Extras, on by default.
@@ -38,7 +40,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.1.7"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2401,6 +2403,10 @@ def connect_and_probe(host, port):
     mem = re.findall(r"MemTotal:\s+(\d+)", TV.sh("cat /proc/meminfo | head -1", quiet=True))
     sdk = props["ro.build.version.sdk"]
     cvte = bool(TV.sh("pm list packages com.cvte.", quiet=True).strip())
+    try:
+        live_app = detect_live_tv_app()
+    except Exception:
+        live_app = ""
     info = {
         "model": props["ro.product.model"] or "Android TV", "device": props["ro.product.device"],
         "manufacturer": props["ro.product.manufacturer"], "release": props["ro.build.version.release"],
@@ -2409,10 +2415,29 @@ def connect_and_probe(host, port):
         "transport": transport[0] if transport else "", "usb_host": usb[0] if usb else "",
         "ram": f"{int(mem[0]) / 1024 / 1024:.1f} GB" if mem else "", "cvte": cvte,
         "board": props["ro.product.board"], "platform": props["ro.board.platform"],
-        "hardware": props["ro.hardware"], "brand": props["ro.product.brand"],
+        "hardware": props["ro.hardware"], "brand": props["ro.product.brand"], "live_tv_app": live_app,
     }
     TV.info = info
     return info
+
+
+# Live TV / tuner apps seen in the toolkit's tested lists, most specific first.
+LIVE_TV_APPS = ["com.sony.dtv.tvx", "com.mediatek.wwtv.tvcenter", "com.tcl.tv", "com.mitv.livetv", "com.realtek.tv",
+                "com.cltv.hybrid", "com.vt.tv.tvcenter", "com.smartdevice.livetv", "com.hisense.tv.tvplayer",
+                "com.android.tv", "com.google.android.tv"]
+
+
+def detect_live_tv_app():
+    """The TV's own Live TV app: the one that tunes a channel (as the stock launcher's channel tiles do), else a
+    known tuner app that is installed; "" for a box without one."""
+    out = TV.sh("cmd package resolve-activity --brief -a android.intent.action.VIEW "
+                "-d content://android.media.tv/channel/1 -t vnd.android.cursor.item/channel", quiet=True)
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    m = COMPONENT_RE.match(lines[-1]) if lines else None
+    installed = TV.packages()
+    if m and m.group(1) != "android" and m.group(1) in installed:
+        return m.group(1)
+    return next((p for p in LIVE_TV_APPS if p in installed), "")
 
 
 class BackupPage(Page):
@@ -4008,7 +4033,8 @@ def launcher_report():
         out.append(f"Live TV row patch: unreadable ({e})")
     out.append(f"config.xml: {config_xml_arrays()}")
     live_pkg, _ = launcher_hidden_defaults()
-    out.append(f"live_tv_package: {live_pkg or '(none)'}")
+    out.append(f"live_tv_package: {live_pkg or '(none)'}" +
+               (" (found on the TV)" if TV.connected and TV.info.get("live_tv_app") else ""))
     apk = LAUNCHER / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
     local_md5 = ""
     if apk.is_file():
@@ -4579,6 +4605,8 @@ class ExtrasPage(Page):
         live_pkg = ""
         try:
             live_pkg, _ = launcher_hidden_defaults()
+            if TV.info.get("live_tv_app") and set_config_string(LAUNCHER, "live_tv_package", live_pkg):
+                self._say(f"Live TV app on this TV: {live_pkg}")
             if ok:
                 set_config_bool(LAUNCHER, "live_tv_row", want_row)
                 set_config_string(LAUNCHER, "live_tv_row_position", want_pos)
@@ -5730,16 +5758,18 @@ def sync_live_on_tv(row, tile, pkg, banner="banner_tv_blue", position="top", swi
 
 
 def launcher_hidden_defaults():
-    """(Live TV package, hidden_apps) from the launcher's config.xml in the toolkit; ("", []) when unreadable."""
+    """(Live TV package, hidden_apps): the connected TV's own Live TV app when one was found (TV.info), else
+    config.xml's live_tv_package; hidden_apps from config.xml. ("", []) when config.xml is unreadable."""
     try:
         xml = (LAUNCHER / "app" / "src" / "main" / "res" / "values" / "config.xml").read_text(encoding="utf-8")
     except OSError:
         return "", []
     live = re.search(r'<string name="live_tv_package"[^>]*>\s*([A-Za-z0-9_.]*)\s*</string>', xml)
+    found = (TV.info or {}).get("live_tv_app") if TV.connected else ""
     xml = re.sub(r"<!--.*?-->", "", xml, flags=re.S)
     block = re.search(r'<string-array name="hidden_apps"[^>]*>(.*?)</string-array>', xml, re.S)
     hidden = re.findall(r"<item>\s*([A-Za-z0-9_.]+)\s*</item>", block.group(1)) if block else []
-    return (live.group(1) if live else ""), hidden
+    return found or (live.group(1) if live else ""), hidden
 
 
 def save_wallpaper(src, dest):
