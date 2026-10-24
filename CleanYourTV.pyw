@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.1.7.pyw            normal mode
-    python CleanYourTV_v1.1.7.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.1.8.pyw            normal mode
+    python CleanYourTV_v1.1.8.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.1.8  Extras: install an app from this PC (Browse APK…): an .apk, the .apk parts of one app, or an
+         .apks/.xapk bundle, copied to the TV with progress and installed or updated, errors in plain words.
   1.1.7  The Live TV tile and row follow the TV's own Live TV app, found on connect (Sony com.sony.dtv.tvx, TCL,
          MediaTek and others), and the build writes it into the launcher's live_tv_package.
   1.1.6  On/off switches in the iPhone style instead of checkboxes, everywhere in the app.
@@ -40,7 +42,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -1058,6 +1060,13 @@ class FakeDev:
             if "-3" in flags:
                 names = [n for n in names if not self.pkgs[n]]
             return "".join(f"package:{n}\n" for n in names)
+        if c.startswith("pm install-create"):
+            return "Success: created install session [1]\n"
+        if c.startswith("pm install-write"):
+            return "Success: streamed\n"
+        if c.startswith("pm install -r") or c.startswith("pm install-commit"):
+            self.pkgs.setdefault("com.example.sideloaded", False)
+            return "Success\n"
         if c.startswith("pm disable-user"):
             name = c.split()[-1]
             self.disabled.add(name)
@@ -4095,6 +4104,138 @@ def launcher_report():
     return text
 
 
+class ProgressSignal(QObject):
+    step = pyqtSignal(int, int, str)      # done, total, what
+
+
+APK_DIR = "/data/local/tmp/cyt-apk"
+
+
+def apks_from(paths, workdir):
+    """The .apk files to install from what was picked: .apk files as they are (several = one app's splits), or
+    the .apk files inside an .apks / .xapk bundle (a zip). Returns (apks, notes)."""
+    import zipfile
+    apks, notes = [], []
+    for p in map(Path, paths):
+        if p.suffix.lower() == ".apk":
+            apks.append(p)
+            continue
+        try:
+            with zipfile.ZipFile(p) as z:
+                names = [n for n in z.namelist() if n.lower().endswith(".apk") and "/" not in n.strip("/")]
+                if not names:
+                    raise RuntimeError(f"{p.name} has no .apk inside")
+                out = Path(workdir) / p.stem
+                out.mkdir(parents=True, exist_ok=True)
+                for n in names:
+                    target = out / Path(n).name
+                    target.write_bytes(z.read(n))
+                    apks.append(target)
+                if any(n.lower().endswith(".obb") for n in z.namelist()):
+                    notes.append(f"{p.name} also carries game data (.obb), which is not copied: the app downloads "
+                                 "it itself, or copy it to Android/obb on the TV")
+        except zipfile.BadZipFile:
+            raise RuntimeError(f"{p.name} is neither an .apk nor an .apks/.xapk bundle")
+    if not apks:
+        raise RuntimeError("no .apk file was picked")
+    return apks, notes
+
+
+def install_apks(paths, sig=None):
+    """Copies the picked app to the TV and installs it with pm (several .apk files go in as one app's splits).
+    Returns a short result line."""
+    import tempfile
+    work = Path(tempfile.mkdtemp(prefix="cyt-apk-"))
+    try:
+        apks, notes = apks_from(paths, work)
+        total = sum(a.stat().st_size for a in apks)
+        before = TV.packages()
+        TV.sh(f"rm -rf {APK_DIR}; mkdir -p {APK_DIR}", quiet=True)
+        sent = 0
+        remote = []
+        for i, a in enumerate(apks):
+            dest = f"{APK_DIR}/{i}.apk"
+            size = a.stat().st_size
+            log(f"copying {a.name} ({size / 1048576:.1f} MB) to the TV", "info")
+            if DEMO:
+                for k in range(5):
+                    time.sleep(0.05)
+                    if sig:
+                        sig.step.emit(sent + size * (k + 1) // 5, total, a.name)
+            else:
+                moved = [0]
+
+                def tick(_path, chunk, _total, base=sent, name=a.name):
+                    moved[0] += chunk          # adb-shell reports each chunk, not the running total
+                    if sig:
+                        sig.step.emit(base + min(moved[0], size), total, name)
+
+                try:
+                    with TV.lock:
+                        TV.dev.push(str(a), dest, read_timeout_s=300.0, transport_timeout_s=300.0,
+                                    progress_callback=tick)
+                except Exception as e:   # some adbd builds refuse the sync protocol: plain shell instead
+                    log(f"direct copy failed ({type(e).__name__}), copying in chunks", "warn")
+                    push_file(a, dest, progress=(lambda d, n, base=sent, sz=size, nm=a.name:
+                                                 sig and sig.step.emit(base + sz * d // n, total, nm)))
+                got = TV.sh(f"stat -c %s {dest} 2>/dev/null || wc -c < {dest}", quiet=True).strip()
+                if got != str(size):
+                    raise RuntimeError(f"{a.name} did not arrive whole ({got or 'nothing'} of {size} bytes)")
+            sent += size
+            remote.append((dest, size, a.name))
+        if sig:
+            sig.step.emit(total, total, "installing…")
+        log("installing on the TV (the TV may ask to confirm, or check the app first)", "info")
+        if len(remote) == 1:
+            out = TV.sh(f"pm install -r {remote[0][0]}", timeout=600)
+        else:
+            out = TV.sh(f"pm install-create -r -S {total}", timeout=120)
+            sid = re.search(r"\[(\d+)\]", out)
+            if not sid:
+                raise RuntimeError(f"the TV refused to start the install: {out.strip()[:200]}")
+            for i, (dest, size, _n) in enumerate(remote):
+                w = TV.sh(f"pm install-write -S {size} {sid.group(1)} {i}.apk {dest}", timeout=600)
+                if "Success" not in w and "uccess" not in w:
+                    TV.sh(f"pm install-abandon {sid.group(1)}", quiet=True)
+                    raise RuntimeError(f"the TV refused part {i + 1}: {w.strip()[:200]}")
+            out = TV.sh(f"pm install-commit {sid.group(1)}", timeout=600)
+        if "Success" not in out:
+            why = re.search(r"Failure \[([^\]]+)\]", out)
+            raise RuntimeError(apk_failure(why.group(1) if why else out.strip()[:200] or "the TV gave no answer"))
+        new = sorted(TV.packages() - before)
+        msg = (f"Installed <b>{new[0]}</b>." if len(new) == 1 else
+               "Installed: it updated an app that was already on the TV." if not new else
+               "Installed: " + ", ".join(new) + ".")
+        return msg + ("<br>" + "<br>".join(notes) if notes else "")
+    finally:
+        try:
+            TV.sh(f"rm -rf {APK_DIR}", quiet=True, retry=False)
+        except Exception:
+            pass
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def apk_failure(code):
+    """pm's failure code in plain words."""
+    plain = {
+        "INSTALL_FAILED_UPDATE_INCOMPATIBLE": "an app with the same name is installed with a different signature: "
+                                              "uninstall that one first",
+        "INSTALL_FAILED_VERSION_DOWNGRADE": "the TV already has a newer version of this app",
+        "INSTALL_FAILED_OLDER_SDK": "the app needs a newer Android than this TV has",
+        "INSTALL_FAILED_NO_MATCHING_ABIS": "the app is built for another processor (try the armeabi-v7a or arm64 "
+                                           "version)",
+        "INSTALL_FAILED_INSUFFICIENT_STORAGE": "the TV is out of storage",
+        "INSTALL_FAILED_VERIFICATION_FAILURE": "the TV's app check (Play Protect) refused it",
+        "INSTALL_FAILED_USER_RESTRICTED": "installing from the computer is switched off on the TV (Developer options "
+                                          "→ Install via USB/ADB)",
+        "INSTALL_PARSE_FAILED_NOT_APK": "the file is not an Android app",
+        "INSTALL_FAILED_MISSING_SPLIT": "this app comes in several parts: pick all its .apk files together, or "
+                                        "its .apks/.xapk bundle",
+    }
+    key = next((k for k in plain if k in code), None)
+    return f"Not installed: {plain[key]} ({key})." if key else f"Not installed: {code}"
+
+
 class ExtrasPage(Page):
     title = "Extras"
     subtitle = "Ad-blocking DNS, faster animations and the Apple TV style launcher"
@@ -4206,6 +4347,26 @@ class ExtrasPage(Page):
         self.out.setMinimumHeight(170)
         self.out.hide()
         lay.addWidget(self.out)
+        self.body.addWidget(c)
+
+        # Install an app from this PC
+        c, lay = card()
+        lay.addWidget(label("Install an app from this PC", "H2"))
+        lay.addWidget(label("Pick an .apk (or all the .apk parts of one app, or an .apks/.xapk bundle): it is copied "
+                            "to the TV and installed, or updated if it is already there. Use apps made for Android "
+                            "TV, from a source you trust.", "Muted", wrap=True))
+        self.apk_btn = button("Browse APK…", "Primary", "folder")
+        self.apk_btn.clicked.connect(self.install_apk)
+        lay.addWidget(hbox(self.apk_btn, None))
+        self.apk_bar = QProgressBar()
+        self.apk_bar.setFixedHeight(8)
+        self.apk_bar.setTextVisible(False)
+        self.apk_bar.hide()
+        lay.addWidget(self.apk_bar)
+        self.apk_msg = Banner("")
+        lay.addWidget(self.apk_msg)
+        self.apk_sig = ProgressSignal()
+        self.apk_sig.step.connect(self._apk_step)
         self.body.addWidget(c)
         self.body.addStretch(1)
 
@@ -4539,6 +4700,39 @@ class ExtrasPage(Page):
 
         run_job(prepare, pool=NET_POOL, on_result=lambda r: (self.refresh_toolchain(), self._run_build(*r)),
                 on_error=lambda m: (self._say(f"Setup failed: {m}"), self.build.setEnabled(True)))
+
+    def install_apk(self):
+        if not self.need_tv():
+            return
+        start = self.win.settings.value("apk_dir", str(Path.home() / "Downloads"))
+        files, _ = QFileDialog.getOpenFileNames(self, "Pick the app to install", start,
+                                                "Android apps (*.apk *.apks *.xapk);;All files (*)")
+        if not files:
+            return
+        self.win.settings.setValue("apk_dir", str(Path(files[0]).parent))
+        self.apk_btn.setEnabled(False)
+        self.apk_bar.setRange(0, 1000)
+        self.apk_bar.setValue(0)
+        self.apk_bar.show()
+        self.apk_msg.set(f"Copying {Path(files[0]).name}" + (f" and {len(files) - 1} more" if len(files) > 1 else "") +
+                         " to the TV…", "info")
+
+        def done(msg):
+            self.apk_msg.set(msg, "ok")
+            BUS.packages_changed.emit()
+
+        run_job(install_apks, files, self.apk_sig, on_result=done,
+                on_error=lambda m: self.apk_msg.set(m, "bad"),
+                on_done=lambda: (self.apk_btn.setEnabled(True), self.apk_bar.hide()))
+
+    def _apk_step(self, done, total, what):
+        if total > 0:
+            self.apk_bar.setValue(int(1000 * done / total))
+        if what == "installing…":
+            self.apk_msg.set("Installing on the TV… if the TV asks to confirm or checks the app, answer it there.",
+                             "info")
+        else:
+            self.apk_msg.set(f"Copying {what} to the TV… {done / 1048576:.1f} of {total / 1048576:.1f} MB", "info")
 
     def _live_switch(self, key, on):
         self.win.settings.setValue(key, "1" if on else "0")
