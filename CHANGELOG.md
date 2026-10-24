@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4
+
+Live TV row: hold OK on a channel to hide it, move it (Left/Right, OK places it) or show the hidden ones again. The launcher keeps these by channel number and name, so they survive reboots.
+
 ## 1.2.3
 
 Hold-OK menu: Uninstall, for apps you installed (not the TV's own apps); Android asks before removing.

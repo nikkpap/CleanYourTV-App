@@ -30,7 +30,8 @@ date.
 - **Extras**: builds and installs the launcher (finds or downloads Java and the Android SDK), with
   options for:
   - the Live TV app as a tile, in the stock launcher's blue;
-  - a Live TV channels row, at the top above the apps or after them;
+  - a Live TV channels row, at the top above the apps or after them, where you hide and reorder
+    channels (hold OK on one);
   - hold OK on an app for a menu: Open, Move, dock, App info, Uninstall;
   - the remote's Input and Home buttons, AdGuard DNS, animation speed and the clock screensaver.
 - **Install apps from the PC**: pick an .apk (or an .apks/.xapk bundle) and it is copied to the TV and
