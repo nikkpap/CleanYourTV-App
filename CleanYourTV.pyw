@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.1.pyw            normal mode
-    python CleanYourTV_v1.3.1.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.2.pyw            normal mode
+    python CleanYourTV_v1.3.2.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.2  Debloat: a package Android protects (devicelockcontroller on Android 14 and the like) is reported as that
+         package, with pm's reason, instead of "this firmware refuses to disable packages".
   1.3.1  Debloat: Report, the enabled packages by category with the tested-list count and note, ready to copy.
   1.3.0  Extras: copy apps from the TV or box to this PC (one or many, the TV's own too if you want): .apk files,
          or .apks for apps in parts, named <package>_<version>, md5-checked, ready for Install an app from this PC.
@@ -68,7 +70,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2149,7 +2151,8 @@ class BatchDialog(Dialog):
         self.choice = "stop"
         txt = f"Disabled {len(done)} package{'s' if len(done) != 1 else ''}."
         if failed:
-            txt += f"  {len(failed)} did not change: {', '.join(failed)}"
+            txt += f"  {len(failed)} did not change: " + ", ".join(
+                f"{n} ({REFUSED[n]})" if n in REFUSED else n for n in failed)
         self.lay.addWidget(label(txt, "Muted", wrap=True))
         view = ShotView("No screenshot")
         view.setMinimumSize(640, 360)
@@ -3356,7 +3359,9 @@ class DebloatPage(Page):
         done, failed, shot, shot_err = res
         if shot:
             BUS.shot.emit(shot)
-        if not done and failed and i == 0:
+        # Only a whole first batch refused without a reason per package means the firmware blocks pm disable-user;
+        # a protected package or two (Android 14 protects some, e.g. devicelockcontroller) is just that package.
+        if not done and len(failed) >= 3 and i == 0 and not any(n in REFUSED for n in failed):
             self.set_running(False)
             self.load()
             inform(self, "This firmware refuses to disable packages",
@@ -3528,12 +3533,33 @@ def settings_restore_commands(host):
     return cmds
 
 
+REFUSED = {}   # package -> why the TV refused it, from the last batch
+
+
+def refusal_reason(out):
+    """pm's answer when it would not disable one package, in a few words; "" when it said nothing useful."""
+    o = out.lower()
+    if "protected" in o:
+        return "protected by Android (cannot be disabled)"
+    if "cannot disable" in o or "can't disable" in o or "not allowed" in o or "securityexception" in o:
+        return "the TV does not allow disabling it"
+    if "unknown package" in o or "not found" in o:
+        return "not on this TV"
+    return ""
+
+
 def disable_batch(names):
+    REFUSED.clear()
+    outs = {}
     for n in names:   # one pm command per shell call: chained commands can stop after the first
-        TV.sh(f"pm disable-user --user 0 {n}")
+        outs[n] = TV.sh(f"pm disable-user --user 0 {n}")
     disabled = TV.packages("-d")
     done = [n for n in names if n in disabled]
     failed = [n for n in names if n not in disabled]
+    for n in failed:
+        why = refusal_reason(outs.get(n, ""))
+        if why:
+            REFUSED[n] = why
     shot, err = None, None
     try:
         TV.sh("input keyevent KEYCODE_HOME", quiet=True)

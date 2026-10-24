@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+Debloat: a package Android protects (devicelockcontroller on Android 14 and the like) is reported as that package, with pm's reason, instead of "this firmware refuses to disable packages".
+
 ## 1.3.1
 
 Debloat: Report, the enabled packages by category with the tested-list count and note, ready to copy.
