@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.1.9.pyw            normal mode
-    python CleanYourTV_v1.1.9.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.0.pyw            normal mode
+    python CleanYourTV_v1.2.0.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.0  The remote's TV button opens the TV's Live TV app directly (Sony com.sony.dtv.tvx and the others the app
+         finds): a KEYCODE_TV app key, through the Input button helper. A switch on Extras.
   1.1.9  The launcher logs what the TV's channel list gave the Live TV row (rows, hidden, radio, unnamed), and the
          Launcher report presses Home first so that line is fresh: for TVs whose row stays empty (Sony).
   1.1.8  Extras: install an app from this PC (Browse APK…): an .apk, the .apk parts of one app, or an
@@ -44,7 +46,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.1.9"
+APP_VERSION = "1.2.0"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -4305,6 +4307,13 @@ class ExtrasPage(Page):
         self.home_svc = Toggle("Home button sends ALL_APPS (Xiaomi sticks, HomeKeyService)")
         lay.addWidget(self.input_svc)
         lay.addWidget(self.home_svc)
+        self.tv_key_b = Toggle("The remote's TV button opens the Live TV app directly (needs the Input button helper)")
+        self.tv_key_b.setChecked(win.settings.value("tv_key", "0") == "1")
+        self.tv_key_b.toggled.connect(lambda on: win.settings.setValue("tv_key", "1" if on else "0"))
+        # The TV button goes through InputKeyService: on together, and off with it.
+        self.tv_key_b.toggled.connect(lambda on: on and self.input_svc.setChecked(True))
+        self.input_svc.toggled.connect(lambda on: on or self.tv_key_b.setChecked(False))
+        lay.addWidget(self.tv_key_b)
         self.live_tile_b = Toggle("Live TV app as a tile, like the stock launcher")
         self.live_row_b = Toggle("Live TV channels row")
         for cb, key in ((self.live_tile_b, "live_tile"), (self.live_row_b, "live_row")):
@@ -4801,6 +4810,7 @@ class ExtrasPage(Page):
         self._say("Live TV row: " + ("included" if ok else f"left out, {why}"))
         want_tile, want_row = self.live_tile_b.isChecked(), self.live_row_b.isChecked()
         want_icon, want_pos = self.live_icon.currentData(), self.live_pos.currentData()
+        want_tv_key = False
         want_menu = self.tile_menu_b.isChecked()
         live_pkg = ""
         try:
@@ -4815,6 +4825,11 @@ class ExtrasPage(Page):
                 if (el / "strings.xml").is_file() and (el / "strings_cleanyourtv.xml").is_file():
                     (el / "strings_cleanyourtv.xml").unlink()
             set_config_bool(LAUNCHER, "tile_menu", want_menu)
+            want_tv_key = self.tv_key_b.isChecked() and self.input_svc.isChecked() and bool(live_pkg) \
+                and bool(TV.info.get("live_tv_app"))
+            apply_tv_key(LAUNCHER, live_pkg, want_tv_key)
+            if want_tv_key:
+                self._say(f"TV button: opens {live_pkg}")
             self._say("Hold-OK menu: " + ("on" if want_menu else "off"))
             self._say("Live TV row: " + (f"on, {want_pos}" if want_row and ok else "off") + " in this build")
             # banner_tv_blue comes with this app's launcher additions; without them, the launcher's own banner_tv.
@@ -4841,7 +4856,7 @@ class ExtrasPage(Page):
                     if ok:
                         grant_livetv()
                     notes = sync_live_on_tv(want_row and ok, want_tile, live_pkg, live_banner(want_icon), want_pos,
-                                            {"tile_menu": want_menu})
+                                            {"tile_menu": want_menu}, want_tv_key)
                     time.sleep(0 if DEMO else 4)
                     return launcher_update_age(), launcher_crash_since(stamp), notes
 
@@ -5882,6 +5897,29 @@ def apply_live_tile(launcher, pkg, on, banner="banner_tv_blue"):
     return "shown as a tile, named Live TV" if on else "hidden again, as the launcher ships"
 
 
+TV_KEY_ADDED = "<!--cyt-tv-key-->"
+
+
+def apply_tv_key(launcher, pkg, on):
+    """The remote's TV button opens the Live TV app (pkg): a KEYCODE_TV entry in config.xml's app_keys, which
+    InputKeyService and HomeKeyService check before anything else. Off takes back only the entry this app added.
+    Returns True when the file changed."""
+    path = Path(launcher) / "app" / "src" / "main" / "res" / "values" / "config.xml"
+    t = orig = _read_raw(path)
+    nl = "\r\n" if "\r\n" in t else "\n"
+    t = re.sub(rf"\r?\n[ \t]*<item>[^<]*</item>[ \t]*{re.escape(TV_KEY_ADDED)}", "", t)
+    if on and pkg and PACKAGE_RE.fullmatch(pkg):
+        m = re.search(r'<string-array name="app_keys"[^>]*>(.*?)</string-array>', t, re.S)
+        own = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S) if m else ""
+        # The person's own TV-button entry wins.
+        if m and not re.search(r"<item>\s*(KEYCODE_TV|170):", own):
+            t = t[:m.start(1)] + f"{nl}        <item>KEYCODE_TV:{pkg}</item> {TV_KEY_ADDED}" + t[m.start(1):]
+    if t == orig:
+        return False
+    path.write_text(t, encoding="utf-8", newline="")
+    return True
+
+
 def set_config_string(launcher, name, value):
     """Sets <string name="name"> in the launcher's config.xml; True when the file changed."""
     path = Path(launcher) / "app" / "src" / "main" / "res" / "values" / "config.xml"
@@ -5905,7 +5943,7 @@ def set_config_bool(launcher, name, value):
     return True
 
 
-def sync_live_on_tv(row, tile, pkg, banner="banner_tv_blue", position="top", switches=None):
+def sync_live_on_tv(row, tile, pkg, banner="banner_tv_blue", position="top", switches=None, tv_key=None):
     """Makes the theme already on the TV agree with the Live TV switches: a theme pushed earlier can switch the
     row off or hide the Live TV app, and it wins over the launcher's own config.xml. Only those keys change.
     Returns notes for the log."""
@@ -5923,6 +5961,16 @@ def sync_live_on_tv(row, tile, pkg, banner="banner_tv_blue", position="top", swi
         if "live_tv_row_position" in cfg and cfg["live_tv_row_position"] != position:
             cfg["live_tv_row_position"] = position
             changed = True
+        if tv_key is not None and isinstance(cfg.get("app_keys"), list):
+            ours = f"KEYCODE_TV:{pkg}"
+            has_tv = any(str(k).startswith(("KEYCODE_TV:", "170:")) for k in cfg["app_keys"])
+            if tv_key:
+                want = cfg["app_keys"] + ([] if has_tv or not pkg else [ours])   # a TV entry of their own wins
+            else:
+                want = [k for k in cfg["app_keys"] if k != ours]
+            if want != cfg["app_keys"]:
+                cfg["app_keys"] = want
+                changed = True
         for k, v in (switches or {}).items():   # other switches the build set, when the theme overrides them
             if k in cfg and cfg[k] != v:
                 cfg[k] = v

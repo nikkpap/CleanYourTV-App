@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0
+
+The remote's TV button opens the TV's Live TV app directly (Sony com.sony.dtv.tvx and the others the app finds), through the Input button helper. A switch on Extras.
+
 ## 1.1.9
 
 The launcher logs what the TV's channel list gave the Live TV row (rows, hidden, radio, unnamed), and the Launcher report presses Home first so that line is fresh: for TVs whose row stays empty (Sony).
