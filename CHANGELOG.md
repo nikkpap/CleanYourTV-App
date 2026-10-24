@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.9
+
+The Live TV app is recognised on every brand the toolkit lists: Sony (tvx, tvlin), Philips, MediaTek (Xiaomi, Redmi, Nokia, Toshiba…), TCL, Xiaomi China, OnePlus, Hisense, Skyworth, Whale OS, SmartDevice, Vestel, Realtek, SDMC, Amlogic, Fire TV, Freebox and the generic AOSP / Google apps.
+
 ## 1.2.8
 
 Live TV row: each channel once (a TV can list the same one twice: two tuners or a copy per user profile); the hold-OK menu has Unhide all channels and Original channel order.

@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.8.pyw            normal mode
-    python CleanYourTV_v1.2.8.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.2.9.pyw            normal mode
+    python CleanYourTV_v1.2.9.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.2.9  The Live TV app is recognised on every brand the toolkit lists: Sony (tvx, tvlin), Philips, MediaTek
+         (Xiaomi, Redmi, Nokia, Toshiba…), TCL, Xiaomi China, OnePlus, Hisense, Skyworth, Whale OS, SmartDevice,
+         Vestel, Realtek, SDMC, Amlogic, Fire TV, Freebox and the generic AOSP / Google apps.
   1.2.8  Live TV row: each channel once (a TV can list the same one twice: two tuners or a copy per user profile);
          the hold-OK menu has Unhide all channels and Original channel order.
   1.2.7  The launcher switches on Extras (Live TV tile, row, icon, position, hold-OK menu, TV button, key helpers)
@@ -62,7 +65,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2581,10 +2584,33 @@ def connect_and_probe(host, port):
     return info
 
 
-# Live TV / tuner apps seen in the toolkit's tested lists, most specific first.
-LIVE_TV_APPS = ["com.sony.dtv.tvx", "com.mediatek.wwtv.tvcenter", "com.tcl.tv", "com.mitv.livetv", "com.realtek.tv",
-                "com.cltv.hybrid", "com.vt.tv.tvcenter", "com.smartdevice.livetv", "com.hisense.tv.tvplayer",
-                "com.android.tv", "com.google.android.tv"]
+# Live TV / tuner apps named in the toolkit's tested lists and device notes (examples/, docs/devices/), vendor apps
+# first and the generic ones last. Only a fallback: the app the TV itself names for channels wins (detect_live_tv_app).
+LIVE_TV_APPS = [
+    "com.sony.dtv.tvx",                 # Sony BRAVIA (Android TV 9+ / Google TV)
+    "com.sony.dtv.tvlin",               # Sony BRAVIA, older firmware
+    "org.droidtv.playtv",               # Philips (TP Vision)
+    "com.mediatek.wwtv.tvcenter",       # MediaTek boards: Xiaomi, Redmi, Nokia, Toshiba, many others
+    "com.tcl.tv",                       # TCL, Thomson, Alcatel
+    "com.mitv.livetv",                  # Xiaomi (newer Global firmware)
+    "com.xiaomi.mitv.tvplayer",         # Xiaomi / Redmi China
+    "com.heytap.tv.livetv",             # OnePlus / Realme TV
+    "com.jamdeo.tv.livetv",             # Hisense (Android TV)
+    "com.skyworth.tv",                  # Skyworth / Coocaa
+    "com.zeasn.livetv",                 # Whale OS sets (Zeasn)
+    "com.smartdevice.livetv",           # SmartDevice / Kalley and similar
+    "com.apps.livetv",                  # sets with com.apps.atv / com.apps.dtv tuners
+    "com.vt.tv.tvcenter",               # VT boards
+    "com.cltv.hybrid",                  # Vestel / iWedia CLTV (not com.cltv.fast, the FAST channels app)
+    "com.realtek.tv",                   # Realtek boards
+    "com.sdmc.tv",                      # SDMC boxes with a tuner
+    "com.droidlogic.droidlivetv",       # Amlogic reference
+    "com.amazon.tv.livetv",             # Fire TV Edition sets
+    "net.oqee.androidtv",               # Freebox (IPTV is the Live TV)
+    "com.hisense.tv.tvplayer",
+    "com.android.tv",                   # AOSP Live TV
+    "com.google.android.tv",            # Google's Live Channels
+]
 
 
 def detect_live_tv_app():
