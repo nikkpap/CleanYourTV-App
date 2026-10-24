@@ -36,6 +36,7 @@ date.
   - the remote's Input and Home buttons, AdGuard DNS, animation speed and the clock screensaver.
 - **Install apps from the PC**: pick an .apk (or an .apks/.xapk bundle) and it is copied to the TV and
   installed.
+- **Copy apps to the PC**: tick one or more apps on the TV and they are saved as .apk / .apks files.
 - **Themes**: the toolkit's themes and your own (wallpaper, columns, switches), pushed and verified.
 - **Profiles**: save a whole setup and apply it to another box.
 - **Finish**: restore, give Home back to the original launcher and remove only the new one (the

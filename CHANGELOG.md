@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0
+
+Extras: copy apps from the TV or box to this PC (one or many, the TV's own too if you want): .apk files, or .apks for apps in parts, named <package>_<version>, md5-checked, ready for Install an app from this PC.
+
 ## 1.2.9
 
 The Live TV app is recognised on every brand the toolkit lists: Sony (tvx, tvlin), Philips, MediaTek (Xiaomi, Redmi, Nokia, Toshiba…), TCL, Xiaomi China, OnePlus, Hisense, Skyworth, Whale OS, SmartDevice, Vestel, Realtek, SDMC, Amlogic, Fire TV, Freebox and the generic AOSP / Google apps.

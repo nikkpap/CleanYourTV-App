@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.2.9.pyw            normal mode
-    python CleanYourTV_v1.2.9.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.0.pyw            normal mode
+    python CleanYourTV_v1.3.0.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.0  Extras: copy apps from the TV or box to this PC (one or many, the TV's own too if you want): .apk files,
+         or .apks for apps in parts, named <package>_<version>, md5-checked, ready for Install an app from this PC.
   1.2.9  The Live TV app is recognised on every brand the toolkit lists: Sony (tvx, tvlin), Philips, MediaTek
          (Xiaomi, Redmi, Nokia, Toshiba…), TCL, Xiaomi China, OnePlus, Hisense, Skyworth, Whale OS, SmartDevice,
          Vestel, Realtek, SDMC, Amlogic, Fire TV, Freebox and the generic AOSP / Google apps.
@@ -65,7 +67,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.3.0"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -1214,6 +1216,8 @@ class FakeDev:
             if "-3" in flags:
                 names = [n for n in names if not self.pkgs[n]]
             return "".join(f"package:{n}\n" for n in names)
+        if c.startswith("pm path "):
+            return f"package:/data/app/{c.split()[-1]}-1/base.apk\n"
         if c.startswith("pm install-create"):
             return "Success: created install session [1]\n"
         if c.startswith("pm install-write"):
@@ -4402,6 +4406,158 @@ def install_apks(paths, sig=None):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def tv_apps(include_system=False):
+    """(package, from the firmware) for the apps on the TV, the person's own first, each group by name."""
+    third = TV.packages("-3")
+    pk = TV.packages() if include_system else set(third)
+    return sorted(((p, p not in third) for p in pk), key=lambda x: (x[1], x[0]))
+
+
+def pull_file(remote, local, tick=None):
+    """Copies one file from the TV: adb's sync protocol, or base64 in 1 MB pieces through the shell when the TV
+    refuses that. Checked with md5 either way."""
+    import base64
+    import hashlib
+    size = int((TV.sh(f"stat -c %s '{remote}' 2>/dev/null", quiet=True).strip() or "0").split()[0] or 0)
+    got = [0]
+
+    def step(_p, chunk, _t):
+        got[0] += chunk
+        if tick:
+            tick(min(got[0], size), size)
+
+    try:
+        with TV.lock:
+            TV.dev.pull(remote, str(local), progress_callback=step, read_timeout_s=300.0, transport_timeout_s=300.0)
+    except Exception as e:
+        log(f"direct copy failed ({type(e).__name__}), copying in pieces", "warn")
+        with open(local, "wb") as f:
+            n = max(1, (size + 1048575) // 1048576)
+            for i in range(n):
+                out = TV.sh(f"dd if='{remote}' bs=1048576 skip={i} count=1 2>/dev/null | base64", quiet=True,
+                            timeout=120)
+                f.write(base64.b64decode("".join(out.split())))
+                if tick:
+                    tick(min((i + 1) * 1048576, size), size)
+    want = (TV.sh(f"md5sum '{remote}'", quiet=True).split() or [""])[0]
+    have = hashlib.md5(Path(local).read_bytes()).hexdigest()
+    if want and want != have:
+        raise RuntimeError(f"{Path(remote).name} arrived damaged (md5 mismatch)")
+    return size
+
+
+def pull_apps(pkgs, dest, sig=None):
+    """Copies apps from the TV to this PC: one .apk, or an .apks bundle (base + splits, which Install takes back).
+    Named <package>_<version>. Returns (saved files, notes)."""
+    import tempfile
+    import zipfile
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    plan = []
+    for pkg in pkgs:
+        if not PACKAGE_RE.fullmatch(pkg):
+            continue
+        paths = [l.split(":", 1)[1].strip() for l in TV.sh(f"pm path {pkg}", quiet=True).splitlines()
+                 if l.startswith("package:") and l.strip().endswith(".apk")]
+        ver = re.search(r"versionName=(\S+)", TV.sh(f"dumpsys package {pkg} | grep -m1 versionName", quiet=True))
+        plan.append((pkg, paths, re.sub(r"[^A-Za-z0-9._-]", "_", ver.group(1)) if ver else "unknown"))
+    sizes = {}
+    for _pkg, paths, _v in plan:
+        for path in paths:
+            out = TV.sh(f"stat -c %s '{path}' 2>/dev/null", quiet=True).strip()
+            sizes[path] = int(out) if out.isdigit() else 0
+    total = sum(sizes.values()) or 1
+    done = [0]
+    saved, notes = [], []
+    work = Path(tempfile.mkdtemp(prefix="cyt-pull-"))
+    try:
+        for pkg, paths, ver in plan:
+            if not paths:
+                notes.append(f"{pkg}: the TV gave no file for it")
+                continue
+            local = []
+            for i, path in enumerate(paths):
+                part = work / pkg / Path(path).name
+                part.parent.mkdir(parents=True, exist_ok=True)
+                base = done[0]
+                if DEMO:
+                    part.write_bytes(b"demo")
+                    if sig:
+                        sig.step.emit(base + sizes[path], total, pkg)
+                else:
+                    pull_file(path, part, (lambda d, _s, b=base, n=pkg: sig and sig.step.emit(b + d, total, n)))
+                done[0] = base + sizes[path]
+                local.append(part)
+            if len(local) == 1:
+                target = dest / f"{pkg}_{ver}.apk"
+                shutil.copyfile(local[0], target)
+            else:   # base.apk and its split_*.apk parts: one .apks file, the format Install reads back
+                target = dest / f"{pkg}_{ver}.apks"
+                with zipfile.ZipFile(target, "w", zipfile.ZIP_STORED) as z:
+                    for f in local:
+                        z.write(f, f.name)
+            saved.append(target)
+            log(f"saved {target.name}", "ok")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return saved, notes
+
+
+class PickAppsDialog(Dialog):
+    """Which apps to copy from the TV, and where to."""
+
+    def __init__(self, parent, apps, dest):
+        super().__init__(parent, "Copy apps from the TV", 620)
+        self.all = apps
+        self.lay.addWidget(label("Tick the apps to copy. Apps made of several parts are saved as one .apks file, "
+                                 "which Install an app from this PC takes back.", "Muted", wrap=True))
+        self.find = QLineEdit()
+        self.find.setPlaceholderText("Filter by name, e.g. stremio")
+        self.lay.addWidget(self.find)
+        self.system = Toggle("Show the TV's own apps too")
+        self.lay.addWidget(self.system)
+        self.list = QListWidget()
+        self.list.setMinimumHeight(300)
+        self.lay.addWidget(self.list)
+        self.dest = QLineEdit(str(dest))
+        browse = button("Folder…", None, "folder")
+        browse.clicked.connect(self.browse)
+        self.lay.addWidget(hbox(label("Save to", "Muted"), self.dest, browse))
+        self.ok = self.buttons("Copy to this PC")
+        self.ticked = set()
+        self.find.textChanged.connect(self.fill)
+        self.system.toggled.connect(self.fill)
+        self.list.itemChanged.connect(self.changed)
+        self.fill()
+
+    def fill(self, *_):
+        self.list.blockSignals(True)
+        self.list.clear()
+        q = self.find.text().strip().lower()
+        for pkg, sysapp in self.all:
+            if sysapp and not self.system.isChecked():
+                continue
+            if q and q not in pkg.lower():
+                continue
+            it = QListWidgetItem(pkg + ("   · TV's own" if sysapp else ""))
+            it.setData(Qt.ItemDataRole.UserRole, pkg)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked if pkg in self.ticked else Qt.CheckState.Unchecked)
+            self.list.addItem(it)
+        self.list.blockSignals(False)
+        self.ok.setEnabled(bool(self.ticked))
+
+    def changed(self, it):
+        pkg = it.data(Qt.ItemDataRole.UserRole)
+        (self.ticked.add if it.checkState() == Qt.CheckState.Checked else self.ticked.discard)(pkg)
+        self.ok.setEnabled(bool(self.ticked))
+
+    def browse(self):
+        d = QFileDialog.getExistingDirectory(self, "Save the apps to", self.dest.text())
+        if d:
+            self.dest.setText(d)
+
+
 def apk_failure(code):
     """pm's failure code in plain words."""
     plain = {
@@ -4569,6 +4725,32 @@ class ExtrasPage(Page):
         lay.addWidget(self.apk_msg)
         self.apk_sig = ProgressSignal()
         self.apk_sig.step.connect(self._apk_step)
+        self.body.addWidget(c)
+
+        # Copy apps from the TV to this PC
+        c, lay = card()
+        lay.addWidget(label("Copy apps from the TV to this PC", "H2"))
+        lay.addWidget(label("Saves one or more apps from the TV or box as .apk files (or .apks when an app comes in "
+                            "parts), to keep them or to install them on another TV with the card above.", "Muted",
+                            wrap=True))
+        self.pull_btn = button("Choose apps…", "Primary", "save")
+        self.pull_btn.clicked.connect(self.pull_apps)
+        self.pull_open = button("Open folder", None, "folder")
+        self.pull_open.clicked.connect(lambda: open_path(Path(getattr(self, "pull_dest", "") or
+                                                              _documents() / "CleanYourTV apps")))
+        self.pull_open.hide()
+        lay.addWidget(hbox(self.pull_btn, self.pull_open, None))
+        self.pull_bar = QProgressBar()
+        self.pull_bar.setFixedHeight(8)
+        self.pull_bar.setTextVisible(False)
+        self.pull_bar.hide()
+        lay.addWidget(self.pull_bar)
+        self.pull_msg = Banner("")
+        lay.addWidget(self.pull_msg)
+        self.pull_sig = ProgressSignal()
+        self.pull_sig.step.connect(lambda d, t, w: (self.pull_bar.setValue(int(1000 * d / max(t, 1))),
+                                                    self.pull_msg.set(f"Copying {w}… {d / 1048576:.1f} of "
+                                                                      f"{t / 1048576:.1f} MB", "info")))
         self.body.addWidget(c)
         self.body.addStretch(1)
 
@@ -4990,6 +5172,42 @@ class ExtrasPage(Page):
         run_job(install_apks, files, self.apk_sig, on_result=done,
                 on_error=lambda m: self.apk_msg.set(m, "bad"),
                 on_done=lambda: (self.apk_btn.setEnabled(True), self.apk_bar.hide()))
+
+    def pull_apps(self):
+        if not self.need_tv():
+            return
+        self.pull_btn.setEnabled(False)
+        self.pull_msg.set("Reading the apps on the TV…", "info")
+
+        def chosen(apps):
+            self.pull_btn.setEnabled(True)
+            self.pull_msg.set("")
+            dest = self.win.settings.value("pull_dir", str(_documents() / "CleanYourTV apps"))
+            d = PickAppsDialog(self, apps, dest)
+            if d.exec() != QDialog.DialogCode.Accepted or not d.ticked:
+                return
+            dest = d.dest.text().strip() or dest
+            self.win.settings.setValue("pull_dir", dest)
+            self.pull_dest = dest
+            self.pull_btn.setEnabled(False)
+            self.pull_bar.setRange(0, 1000)
+            self.pull_bar.setValue(0)
+            self.pull_bar.show()
+            self.pull_open.hide()
+
+            def done(res):
+                saved, notes = res
+                msg = (f"Saved {len(saved)} app{'s' if len(saved) != 1 else ''} to <b>{dest}</b>: " +
+                       ", ".join(p.name for p in saved[:6]) + (" …" if len(saved) > 6 else ""))
+                self.pull_msg.set(msg + ("<br>" + "<br>".join(notes) if notes else ""), "ok" if saved else "warn")
+                self.pull_open.show()
+
+            run_job(pull_apps, sorted(d.ticked), dest, self.pull_sig, on_result=done,
+                    on_error=lambda m: self.pull_msg.set(f"Copy stopped: {m}", "bad"),
+                    on_done=lambda: (self.pull_btn.setEnabled(True), self.pull_bar.hide()))
+
+        run_job(lambda: tv_apps(True), on_result=chosen,
+                on_error=lambda m: (self.pull_btn.setEnabled(True), self.pull_msg.set(m, "bad")))
 
     def _apk_step(self, done, total, what):
         if total > 0:
