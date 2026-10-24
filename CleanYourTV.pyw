@@ -2435,7 +2435,9 @@ def detect_live_tv_app():
     lines = [l.strip() for l in out.splitlines() if l.strip()]
     m = COMPONENT_RE.match(lines[-1]) if lines else None
     installed = TV.packages()
-    if m and m.group(1) != "android" and m.group(1) in installed:
+    # A launcher that answers for channels (some Google TV homes do) is not the Live TV app.
+    if m and m.group(1) in installed and m.group(1) not in ["android", OUR_LAUNCHER] + KNOWN_STOCK \
+            and "launcher" not in m.group(1):
         return m.group(1)
     return next((p for p in LIVE_TV_APPS if p in installed), "")
 
