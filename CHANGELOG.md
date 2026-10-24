@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.7
+
+Backup → Profiles: the name is filled in from the hardware on connect (maker, brand, model, Android version, e.g. "SkyworthDigital COSMOTE HY44G - Android 14"), and follows the TV you connect to until you type your own.
+
 ## 1.3.6
 
 Everything of yours in one folder, Documents/CleanYourTV: `backup`, `profile`, `themes` (My theme included), `apps` and `toolkit`. The old Documents/CleanYourTV * folders and the My theme are moved there once at the first start, and saved settings follow them. Save & apply on My theme offers to keep a named copy in `themes`.

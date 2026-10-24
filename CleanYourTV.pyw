@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.6.pyw            normal mode
-    python CleanYourTV_v1.3.6.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.3.7.pyw            normal mode
+    python CleanYourTV_v1.3.7.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.3.7  Backup → Profiles: the name is filled in from the hardware on connect (maker, brand, model, Android
+         version), and follows the TV you connect to until you type your own.
   1.3.6  Everything of yours in one folder, Documents/CleanYourTV: backup, profile, themes (My theme included),
          apps and toolkit; the old Documents/CleanYourTV * folders and the My theme are moved there once, and
          saved settings follow. Save & apply on My theme offers to keep a named copy in themes.
@@ -81,7 +83,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2347,6 +2349,20 @@ def ask(parent, title, text, ok="Continue", kind="Primary"):
     return d.exec() == QDialog.DialogCode.Accepted
 
 
+def hardware_name(info):
+    """A profile name from the hardware: maker, brand when it differs, model and Android version."""
+    info = info or {}
+    model = (info.get("model") or "").strip()
+    parts = []
+    for k in ("manufacturer", "brand"):
+        v = (info.get(k) or "").strip()
+        if v and v.lower() not in ("unknown", "android") and v.lower() not in " ".join(parts + [model]).lower():
+            parts.append(v)
+    name = " ".join(parts + [model]).strip() or "TV"
+    rel = (info.get("release") or "").strip()
+    return f"{name} - Android {rel}" if rel else name
+
+
 def ask_name(parent, title, text, default="", ok="Save", cancel="Cancel"):
     """A short question with a name to type; the name, or "" when cancelled or left empty."""
     d = Dialog(parent, title, 520)
@@ -2911,8 +2927,10 @@ class BackupPage(Page):
         if not ok:
             self.refresh_profiles()
             return
-        if not self.prof_name.text():
-            self.prof_name.setText(f"{info.get('model') or 'TV'} setup")
+        cur = self.prof_name.text().strip()
+        if not cur or cur == getattr(self, "_auto_name", None):   # not typed by you: follow the hardware
+            self._auto_name = hardware_name(info)
+            self.prof_name.setText(self._auto_name)
         self.refresh_profiles()
         best, best_score = None, 0
         for i in range(self.profiles.count()):
@@ -2927,6 +2945,7 @@ class BackupPage(Page):
             best.setText("✓ this TV   ·   " + best.text())
             best.setForeground(QColor(C["ok"]))
             self.prof_name.setText(name)
+            self._auto_name = name
             self.win.matched_profile = (Path(best.data(Qt.ItemDataRole.UserRole)), name)
             self.prof_msg.set(f"Connected hardware matches your profile <b>{name}</b>; it is selected. Press "
                               "<b>Apply to TV</b> to set this box up like before.", "ok")
@@ -2974,7 +2993,7 @@ class BackupPage(Page):
     def save_profile(self):
         if not self.need_tv():
             return
-        name = self.prof_name.text().strip() or f"{TV.info.get('model') or 'TV'} setup"
+        name = self.prof_name.text().strip() or hardware_name(TV.info)
         dest = PROFILE_DIR / f"{_safe_name(name)}.cytv"
         if dest.exists() and not ask(self, "Replace profile?", f"A profile called <b>{name}</b> exists. Replace it "
                                      "with the TV's current setup?", "Replace"):
@@ -3017,7 +3036,7 @@ class BackupPage(Page):
         """Save profile, then pick the apps to put in with it: one .zip for the next box of this kind."""
         if not self.need_tv():
             return
-        name = self.prof_name.text().strip() or f"{TV.info.get('model') or 'TV'} setup"
+        name = self.prof_name.text().strip() or hardware_name(TV.info)
         dest = PROFILE_DIR / f"{_safe_name(name)}.zip"
         if dest.exists() and not ask(self, "Replace bundle?", f"<b>{dest.name}</b> exists. Replace it with this TV's "
                                      "current setup and apps?", "Replace"):
