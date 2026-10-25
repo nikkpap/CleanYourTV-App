@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0
+
+Connect: TV in another home (Tailscale). Find my Tailscale TVs lists the devices in your Tailscale network, TVs with ADB open first, and connects to the one you pick by its 100.x address; Steps for the TV has the one-time setup there, and Get Tailscale the download. Nothing is forwarded on a router.
+
 ## 1.3.10
 
 Backups and profiles are named by the hardware alone, e.g. "SkyworthDigital COSMOTE-TV TV Box (HY44G)": a backup folder adds only the date and time, no IP address; the profile name drops the Android version.

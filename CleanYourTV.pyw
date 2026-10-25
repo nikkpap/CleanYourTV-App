@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.3.10.pyw            normal mode
-    python CleanYourTV_v1.3.10.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.4.0.pyw            normal mode
+    python CleanYourTV_v1.4.0.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.4.0  Connect: TV in another home (Tailscale). Find my Tailscale TVs lists the devices in your Tailscale network,
+         TVs with ADB open first, and connects to the one you pick by its 100.x address; Steps for the TV has the
+         one-time setup there, and Get Tailscale the download. Nothing is forwarded on a router.
   1.3.10 Backups and profiles are named by the hardware alone, e.g. "SkyworthDigital COSMOTE-TV TV Box (HY44G)":
          a backup folder adds only the date and time, no IP address; the profile name drops the Android version.
   1.3.9  Starting a newer version while an older one (1.3.9 on) is open closes the older one and opens the new one,
@@ -92,7 +95,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.3.10"
+APP_VERSION = "1.4.0"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2484,6 +2487,22 @@ class Page(QScrollArea):
         pass
 
 
+TS_STEPS = (
+    "<b>Once, at the TV</b> (someone there, about ten minutes):<br>"
+    "1.  Install <b>Tailscale</b> on the TV from the Play Store (or Extras → Install APK from this PC).<br>"
+    "2.  Open it on the TV: it shows a QR code. Scan it with a phone and sign in with <b>your</b> Tailscale "
+    "account, the same one as on this PC. (Or the owner keeps it in their own account and, in the admin console, "
+    "Machines → the TV → <b>Share</b>, invites you.)<br>"
+    "3.  On the TV: Developer options → <b>USB debugging</b> on, and Network/ADB debugging if it has it.<br>"
+    "4.  Here: <b>Find my Tailscale TVs</b>, pick the TV, <b>Connect to this TV</b>. On the TV, “Allow USB "
+    "debugging?” → tick <i>Always allow</i> → OK.<br><br>"
+    "<b>On this PC:</b> Tailscale installed and signed in to the same account (Get Tailscale).<br><br>"
+    "With Tailscale on the TV itself it works even when both homes use the same addresses (both 192.168.1.x). "
+    "<b>Never forward port 5555</b> on a router: ADB is full control of the TV and bots scan for it. "
+    "When you are done, Finish closes ADB as usual; Tailscale can stay for the next time."
+)
+
+
 class ConnectPage(Page):
     title = "Connect"
     subtitle = "Find your TV on the network and open an ADB connection"
@@ -2519,6 +2538,36 @@ class ConnectPage(Page):
         self.progress.hide()
         lay.addWidget(self.progress)
         self.body.addWidget(c)
+
+        # A TV in another home
+        c, lay = card()
+        lay.addWidget(label("TV in another home (Tailscale)", "H2"))
+        lay.addWidget(label(
+            "For a TV in another house or city: with Tailscale on this PC and on the TV, signed in to your account, "
+            "the TV gets a private <b>100.x</b> address that works here like a local one: debloat, launcher, themes, "
+            "profiles, screenshots and the remote. Never forward port 5555 on a router instead.", "Muted",
+            wrap=True, rich=True))
+        self.ts_list = QListWidget()
+        self.ts_list.setMinimumHeight(96)
+        self.ts_list.setMaximumHeight(170)
+        self.ts_list.hide()
+        lay.addWidget(self.ts_list)
+        self.ts_msg = Banner("", "info")
+        lay.addWidget(self.ts_msg)
+        self.ts_find = button("Find my Tailscale TVs", None, "search", "Read the devices in your Tailscale network")
+        self.ts_use = button("Connect to this TV", "Primary", "plug")
+        self.ts_use.setEnabled(False)
+        self.ts_get = button("Get Tailscale", "Ghost", "spark", TAILSCALE_GET)
+        self.ts_steps = button("Steps for the TV", "Ghost", "info")
+        lay.addWidget(hbox(self.ts_find, self.ts_steps, self.ts_get, None, self.ts_use))
+        self.body.addWidget(c)
+        self.ts_find.clicked.connect(self.ts_refresh)
+        self.ts_use.clicked.connect(self.ts_connect)
+        self.ts_list.itemDoubleClicked.connect(lambda _i: self.ts_connect())
+        self.ts_list.currentItemChanged.connect(
+            lambda it, _p: self.ts_use.setEnabled(bool(it and it.data(Qt.ItemDataRole.UserRole))))
+        self.ts_get.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(TAILSCALE_GET)))
+        self.ts_steps.clicked.connect(lambda: inform(self, "A TV in another home", TS_STEPS, "info"))
 
         # Device facts
         c, lay = card()
@@ -2592,6 +2641,66 @@ class ConnectPage(Page):
         if DEMO:
             self.host.setCurrentText("192.168.1.77")
         self.auto = False
+
+    # --- Tailscale ------------------------------------------------------------------------------
+    def ts_refresh(self):
+        self.ts_find.setEnabled(False)
+        self.ts_msg.set("Reading your Tailscale network…", "info")
+        run_job(tailscale_peers, pool=NET_POOL, on_result=self._ts_show,
+                on_error=lambda m: self.ts_msg.set(f"Could not read Tailscale: {m}", "bad"),
+                on_done=lambda: self.ts_find.setEnabled(True))
+
+    def _ts_show(self, res):
+        state = res.get("state")
+        self.ts_list.clear()
+        self.ts_list.setVisible(False)
+        if state == "missing":
+            self.ts_msg.set("Tailscale is not installed on this PC. Press <b>Get Tailscale</b>, install it, sign in, "
+                            "then press <b>Find my Tailscale TVs</b> again.", "warn")
+            return
+        if state == "NeedsLogin":
+            self.ts_msg.set("Tailscale is installed but not signed in. Open it from the tray, sign in, then try "
+                            "again.", "warn")
+            return
+        if state == "Stopped":
+            self.ts_msg.set("Tailscale is switched off on this PC. Switch it on from the tray icon, then try again.",
+                            "warn")
+            return
+        if state != "Running":
+            self.ts_msg.set(f"Tailscale did not answer ({res.get('error') or state}). Is it running?", "bad")
+            return
+        peers = res.get("peers") or []
+        for p in peers:
+            dot = "●" if p["online"] else "○"
+            tag = "ADB open" if p["adb"] else ("online" if p["online"] else "offline")
+            extra = " · shared with you" if p["shared"] else ""
+            it = QListWidgetItem(f"{dot}  {p['name']}   ·   {p['ip']}   ·   {p['os'] or '?'}   ·   {tag}{extra}")
+            it.setData(Qt.ItemDataRole.UserRole, p["ip"])
+            it.setForeground(QColor(C["ok"] if p["adb"] else (C["text"] if p["online"] else C["muted"])))
+            self.ts_list.addItem(it)
+        self.ts_list.setVisible(bool(peers))
+        tvs = [p for p in peers if p["adb"]]
+        if tvs:
+            self.ts_list.setCurrentRow(0)
+            self.ts_msg.set(f"{len(tvs)} device{'s' if len(tvs) != 1 else ''} with ADB open: pick one and press "
+                            "<b>Connect to this TV</b>. The TV asks “Allow USB debugging?” the first time; someone "
+                            "there presses OK (tick <i>Always allow</i>).", "ok")
+        elif any(p["os"] == "android" for p in peers):
+            self.ts_msg.set("Your Android devices are listed, but none answers on ADB port 5555. On the TV: Developer "
+                            "options → USB debugging (and Network debugging) on; an offline one is asleep or its "
+                            "Tailscale is off. <b>Steps for the TV</b> has the whole setup.", "warn")
+        else:
+            self.ts_msg.set(f"No TV in your Tailscale network yet{' (only ' + str(len(peers)) + ' other devices)' if peers else ''}. "
+                            "Press <b>Steps for the TV</b> for the one-time setup at the TV.", "warn")
+
+    def ts_connect(self):
+        it = self.ts_list.currentItem()
+        ip = it.data(Qt.ItemDataRole.UserRole) if it else ""
+        if not ip:
+            return
+        self.host.setCurrentText(ip)
+        self.port.setValue(5555)
+        self.do_connect()
 
     # --- auto ---------------------------------------------------------------------------------
     def auto_connect(self):
@@ -2745,6 +2854,72 @@ class ConnectPage(Page):
                                      self.status.set("Paired and port 5555 opened. Press Connect.", "ok")),
                 on_error=lambda m: self.status.set(f"Pairing failed: {m}", "bad"),
                 on_done=lambda: self.pair_btn.setEnabled(True))
+
+
+# ----------------------------------------------------------------------------------------------
+# A TV in another home, over Tailscale (the toolkit's docs/REMOTE.md): the TV's 100.x address works like a local one
+# ----------------------------------------------------------------------------------------------
+TAILSCALE_GET = "https://tailscale.com/download"
+
+
+def tailscale_exe():
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    cands = []
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", ""),
+                     os.environ.get("LOCALAPPDATA", "")):
+            if base:
+                cands.append(Path(base) / "Tailscale" / "tailscale.exe")
+    else:
+        cands += [Path("/Applications/Tailscale.app/Contents/MacOS/Tailscale"), Path("/usr/bin/tailscale"),
+                  Path("/usr/local/bin/tailscale")]
+    return next((str(c) for c in cands if c.is_file()), "")
+
+
+def tailscale_peers():
+    """{"state": missing | NeedsLogin | Stopped | Running | error, "peers": [...], "self": name, "error": text}.
+    Each peer: name, ip (IPv4 100.x), os, online, adb (port 5555 answers), shared (from someone else's tailnet)."""
+    if DEMO:
+        return {"state": "Running", "self": "nikos-pc", "peers": [
+            {"name": "cosmote-box-thessaloniki", "ip": "100.101.7.21", "os": "android", "online": True, "adb": True,
+             "shared": False},
+            {"name": "sony-bravia-salon", "ip": "100.88.12.4", "os": "android", "online": False, "adb": False,
+             "shared": True},
+            {"name": "workshop-pc", "ip": "100.70.3.9", "os": "windows", "online": True, "adb": False,
+             "shared": False}]}
+    exe = tailscale_exe()
+    if not exe:
+        return {"state": "missing", "peers": []}
+    try:
+        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=10,
+                           creationflags=NO_WINDOW, encoding="utf-8", errors="replace")
+        data = json.loads(r.stdout or "{}")
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        return {"state": "error", "peers": [], "error": str(e)}
+    state = data.get("BackendState") or "error"
+    me = (data.get("Self") or {}).get("HostName", "")
+    peers = []
+    for p in (data.get("Peer") or {}).values():
+        ip = next((a for a in p.get("TailscaleIPs") or [] if "." in a), "")
+        if not ip:
+            continue
+        host = p.get("HostName") or ""
+        dns = (p.get("DNSName") or "").split(".")[0]
+        name = (dns if host.lower() in ("", "localhost") else host) or dns or ip   # Android often says "localhost"
+        peers.append({"name": name, "ip": ip, "os": (p.get("OS") or "").lower(), "online": bool(p.get("Online")),
+                      "shared": bool(p.get("ShareeNode")),
+                      "adb": False})
+    from concurrent.futures import ThreadPoolExecutor
+    live = [p for p in peers if p["online"]]
+    if live:
+        with ThreadPoolExecutor(max_workers=min(16, len(live))) as ex:
+            for p, ok in zip(live, ex.map(lambda q: _port_open(q["ip"], 5555, 2.0), live)):
+                p["adb"] = ok
+    # TVs first (Android, ADB answering, online), then the rest
+    peers.sort(key=lambda p: (not p["adb"], p["os"] != "android", not p["online"], p["name"].lower()))
+    return {"state": state, "self": me, "peers": peers}
 
 
 def _port_open(host, port, timeout=1.5):
