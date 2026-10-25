@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.2
+
+The undo list is also kept on the TV (/data/local/tmp/tidytv/disabled.txt, the same file TidyTV keeps), written before each change. Restore adds what is on it but not in this PC's record, so it works from any PC, and puts back what TidyTV turned off or removed too.
+
 ## 1.4.1
 
 Connect → Tailscale: Invite a friend (the 4 steps as a ready message, Greek or English, to copy) and an API key (kept with Windows DPAPI): a new Android TV in your tailnet is named by you and set up on the next Find, tag:tv and no key expiry, so only you reach it and only its ADB port. The tag:tv rules are offered when missing.

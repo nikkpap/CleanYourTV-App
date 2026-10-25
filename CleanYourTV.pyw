@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.4.1.pyw            normal mode
-    python CleanYourTV_v1.4.1.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.4.2.pyw            normal mode
+    python CleanYourTV_v1.4.2.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.4.2  The undo list is also kept on the TV (/data/local/tmp/tidytv/disabled.txt, the same file TidyTV keeps),
+         written before each change. Restore adds what is on it but not in this PC's record, so it works from any PC,
+         and puts back what TidyTV turned off or removed too.
   1.4.1  Connect → Tailscale: Invite a friend (the 4 steps as a ready message, Greek or English, to copy) and an API
          key (kept with Windows DPAPI): a new Android TV in your tailnet is named by you and set up on the next Find,
          tag:tv and no key expiry, so only you reach it and only its ADB port. The tag:tv rules are offered when
@@ -99,7 +102,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -4119,6 +4122,7 @@ class DebloatPage(Page):
         def go():
             for n in names:
                 TV.sh(f"pm enable {n}")
+            tv_undo_drop(names)
             return TV.packages("-d")
 
         run_job(go, on_result=lambda d: (log(f"enabled {len(names)} packages", "ok"), self.load(),
@@ -4215,7 +4219,7 @@ class DebloatPage(Page):
         d = BatchDialog(self, i + 1, len(batches), done, failed, shot, shot_err)
         d.exec()
         if d.choice == "undo":
-            run_job(lambda: [TV.sh(f"pm enable {n}") for n in done],
+            run_job(lambda: ([TV.sh(f"pm enable {n}") for n in done], tv_undo_drop(done)),
                     on_result=lambda _: (self.banner.set(f"Batch {i + 1} undone; stopped there.", "warn"),
                                          self.load()))
             self.set_running(False)
@@ -4389,14 +4393,51 @@ def refusal_reason(out):
     return ""
 
 
+# The undo list kept on the TV itself, the same file TidyTV (the phone app) keeps: one package per line, written
+# before each change. Restore from any PC or phone, with either app, finds what was turned off even when this PC's
+# record is gone. TidyTV's list of apps it removed for the user sits next to it.
+TV_UNDO_DIR = "/data/local/tmp/tidytv"
+TV_UNDO_FILE = TV_UNDO_DIR + "/disabled.txt"
+TV_REMOVED_FILE = TV_UNDO_DIR + "/removed.txt"
+
+
+def tv_undo_add(names):
+    names = [n for n in names if PACKAGE_RE.fullmatch(n)]
+    if not names:
+        return True
+    out = TV.sh(f"mkdir -p {TV_UNDO_DIR} && for p in {' '.join(names)}; do grep -qxF $p {TV_UNDO_FILE} 2>/dev/null "
+                f"|| printf '%s\\n' $p >> {TV_UNDO_FILE}; done && echo ok", quiet=True)
+    return "ok" in out
+
+
+def tv_undo_drop(names):
+    names = [n for n in names if PACKAGE_RE.fullmatch(n)]
+    if names:
+        pat = " ".join(f"-e {n}" for n in names)
+        TV.sh(f"if [ -e {TV_UNDO_FILE} ]; then grep -vxF {pat} {TV_UNDO_FILE} > {TV_UNDO_FILE}.tmp; "
+              f"mv {TV_UNDO_FILE}.tmp {TV_UNDO_FILE}; fi; echo ok", quiet=True)
+
+
+def tv_undo_read():
+    """(disabled, removed): the packages on the TV's own undo lists."""
+    def read(f):
+        out = TV.sh(f"if [ -e {f} ]; then cat {f}; fi; echo END", quiet=True)
+        return [l.strip() for l in out.splitlines() if PACKAGE_RE.fullmatch(l.strip())]
+    return read(TV_UNDO_FILE), read(TV_REMOVED_FILE)
+
+
 def disable_batch(names):
     REFUSED.clear()
     outs = {}
+    already = TV.packages("-d")   # the firmware's own disabled apps never go on the undo list
+    if not tv_undo_add([n for n in names if n not in already]):
+        log("could not write the undo list on the TV; this PC's record still has it", "warn")
     for n in names:   # one pm command per shell call: chained commands can stop after the first
         outs[n] = TV.sh(f"pm disable-user --user 0 {n}")
     disabled = TV.packages("-d")
     done = [n for n in names if n in disabled]
     failed = [n for n in names if n not in disabled]
+    tv_undo_drop(failed)
     for n in failed:
         why = refusal_reason(outs.get(n, ""))
         if why:
@@ -7826,7 +7867,11 @@ class FinishPage(Page):
             return
         path = Path(self.list_path.text().strip() or gui_list_path())
         extra = settings_restore_commands(TV.host)
-        if not path.exists() and not extra:
+        try:
+            on_tv, removed_tv = tv_undo_read() if not DEMO else ([], [])
+        except Exception:
+            on_tv, removed_tv = [], []
+        if not path.exists() and not extra and not on_tv and not removed_tv:
             self.restore_msg.set(f"Nothing to restore for {TV.host}: no packages were disabled and no settings "
                                  "were changed from this app.", "warn")
             return
@@ -7849,6 +7894,15 @@ class FinishPage(Page):
             except Exception as e:
                 self.restore_msg.set(str(e), "bad")
                 return
+        if on_tv or removed_tv:
+            listed = set(" ".join(cmds).split())
+            more = [f"pm enable {n}" for n in on_tv if n not in listed]
+            back = [f"cmd package install-existing {n}" for n in removed_tv]
+            if more or back:
+                cmds = [c for c in cmds if c != "pm list packages -d"] + \
+                    ["# on the TV's own undo list (CleanYourTV or TidyTV), not in this PC's record"] + more + back + \
+                    ["pm list packages -d"]
+            cmds.append(f"rm -f {TV_UNDO_FILE} {TV_REMOVED_FILE}")
         if extra:
             # The TV's own values from before the app changed them (DNS, animations, screensaver); they come
             # after the package record, so they win over its animation scales.
