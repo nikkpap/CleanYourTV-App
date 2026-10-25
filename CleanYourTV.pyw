@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.4.0.pyw            normal mode
-    python CleanYourTV_v1.4.0.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.4.1.pyw            normal mode
+    python CleanYourTV_v1.4.1.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,10 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.4.1  Connect → Tailscale: Invite a friend (the 4 steps as a ready message, Greek or English, to copy) and an API
+         key (kept with Windows DPAPI): a new Android TV in your tailnet is named by you and set up on the next Find,
+         tag:tv and no key expiry, so only you reach it and only its ADB port. The tag:tv rules are offered when
+         missing.
   1.4.0  Connect: TV in another home (Tailscale). Find my Tailscale TVs lists the devices in your Tailscale network,
          TVs with ADB open first, and connects to the one you pick by its 100.x address; Steps for the TV has the
          one-time setup there, and Get Tailscale the download. Nothing is forwarded on a router.
@@ -95,7 +99,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2496,7 +2500,9 @@ TS_STEPS = (
     "3.  On the TV: Developer options → <b>USB debugging</b> on, and Network/ADB debugging if it has it.<br>"
     "4.  Here: <b>Find my Tailscale TVs</b>, pick the TV, <b>Connect to this TV</b>. On the TV, “Allow USB "
     "debugging?” → tick <i>Always allow</i> → OK.<br><br>"
-    "<b>On this PC:</b> Tailscale installed and signed in to the same account (Get Tailscale).<br><br>"
+    "<b>On this PC:</b> Tailscale installed and signed in to the same account (Get Tailscale). With an <b>API "
+    "key</b>, each new TV is set up for you when it first shows up: tag:tv (only you reach it, only its ADB port) "
+    "and no key expiry. <b>Invite a friend</b> has these steps as a ready message for them.<br><br>"
     "With Tailscale on the TV itself it works even when both homes use the same addresses (both 192.168.1.x). "
     "<b>Never forward port 5555</b> on a router: ADB is full control of the TV and bots scan for it. "
     "When you are done, Finish closes ADB as usual; Tailscale can stay for the next time."
@@ -2559,7 +2565,10 @@ class ConnectPage(Page):
         self.ts_use.setEnabled(False)
         self.ts_get = button("Get Tailscale", "Ghost", "spark", TAILSCALE_GET)
         self.ts_steps = button("Steps for the TV", "Ghost", "info")
-        lay.addWidget(hbox(self.ts_find, self.ts_steps, self.ts_get, None, self.ts_use))
+        self.ts_invite = button("Invite a friend", "Ghost", "remote", "A ready message with the 4 steps, to send by Viber")
+        self.ts_keybtn = button("API key…", "Ghost", "lock", "Lets this app set a new TV up for you: tag:tv, no expiry")
+        lay.addWidget(hbox(self.ts_find, self.ts_invite, self.ts_steps, self.ts_keybtn, self.ts_get, None,
+                           self.ts_use))
         self.body.addWidget(c)
         self.ts_find.clicked.connect(self.ts_refresh)
         self.ts_use.clicked.connect(self.ts_connect)
@@ -2568,6 +2577,8 @@ class ConnectPage(Page):
             lambda it, _p: self.ts_use.setEnabled(bool(it and it.data(Qt.ItemDataRole.UserRole))))
         self.ts_get.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(TAILSCALE_GET)))
         self.ts_steps.clicked.connect(lambda: inform(self, "A TV in another home", TS_STEPS, "info"))
+        self.ts_invite.clicked.connect(self.ts_invite_dialog)
+        self.ts_keybtn.clicked.connect(self.ts_key_dialog)
 
         # Device facts
         c, lay = card()
@@ -2670,6 +2681,12 @@ class ConnectPage(Page):
             self.ts_msg.set(f"Tailscale did not answer ({res.get('error') or state}). Is it running?", "bad")
             return
         peers = res.get("peers") or []
+        labels = self.win.settings.value("tailscale/labels", {}) or {}
+        if not isinstance(labels, dict):
+            labels = {}
+        for p in peers:
+            if labels.get(p["ip"]):
+                p["name"] = f"{labels[p['ip']]}  ({p['name']})"
         for p in peers:
             dot = "●" if p["online"] else "○"
             tag = "ADB open" if p["adb"] else ("online" if p["online"] else "offline")
@@ -2692,6 +2709,124 @@ class ConnectPage(Page):
         else:
             self.ts_msg.set(f"No TV in your Tailscale network yet{' (only ' + str(len(peers)) + ' other devices)' if peers else ''}. "
                             "Press <b>Steps for the TV</b> for the one-time setup at the TV.", "warn")
+
+        key = ts_key_load()
+        if key and not getattr(self, "_ts_busy", False):
+            self._ts_busy = True
+            run_job(ts_devices, key, pool=NET_POOL, on_result=self._ts_new_tvs,
+                    on_error=lambda m: (self.ts_msg.set(f"Tailscale API: {m}", "bad"), setattr(self, "_ts_busy", False)))
+
+    def _ts_new_tvs(self, devices):
+        """New Android devices (no tag:tv yet): name each one and set it up, one after the other."""
+        self._ts_busy = False
+        seen = getattr(self, "_ts_seen", set())   # set up or skipped in this session: not asked again
+        self._ts_seen = seen
+        fresh = [d for d in devices if (d.get("os") or "").lower() == "android" and TS_TAG not in (d.get("tags") or [])
+                 and d.get("id") not in seen]
+        if not fresh:
+            return
+        self._ts_queue = fresh
+        key = ts_key_load()
+        run_job(ts_policy_ok, key, pool=NET_POOL, on_result=self._ts_policy_checked,
+                on_error=lambda m: self.ts_msg.set(f"Tailscale API: {m}", "bad"))
+
+    def _ts_policy_checked(self, ok):
+        if not ok:
+            if not ask(self, "Set up the TV rules?",
+                       f"Your Tailscale network does not have the <b>{TS_TAG}</b> rules yet. They let only you reach "
+                       "the TVs, and only their ADB port; your own PCs and phones keep reaching each other, and a "
+                       "TV reaches nothing else.<br><br>This <b>replaces</b> your tailnet's access rules. If you "
+                       "have changed them before, cancel and add these by hand instead:<br><pre>"
+                       + json.dumps(TS_POLICY, indent=2) + "</pre>", "Replace the rules"):
+                self.ts_msg.set(f"New TV found, but it is not set up: the {TS_TAG} rules are missing. Add them in the "
+                                f"admin console (<a href='{TS_ACL_URL}'>Access controls</a>) and press Find again.",
+                                "warn")
+                return
+            run_job(ts_policy_set, ts_key_load(), pool=NET_POOL, on_result=lambda _r: self._ts_next(),
+                    on_error=lambda m: self.ts_msg.set(f"Could not set the rules: {m}", "bad"))
+            return
+        self._ts_next()
+
+    def _ts_next(self):
+        if not getattr(self, "_ts_queue", None):
+            self.ts_refresh()
+            return
+        d = self._ts_queue.pop(0)
+        self._ts_seen.add(d.get("id"))
+        ip = next((a for a in d.get("addresses") or [] if "." in a), "")
+        short = (d.get("name") or d.get("hostname") or ip).split(".")[0]
+        name = ask_name(self, "New TV in your Tailscale",
+                        f"A new Android device joined: <b>{short}</b> ({ip}). Give it a name you will recognise, "
+                        "e.g. <i>Γιώργος - σαλόνι</i>. It is then set up: <b>tag:tv</b> (only you reach it, only "
+                        "its ADB port; it reaches nothing) and no key expiry, so your friend never signs in again.",
+                        "", "Set it up", "Skip")
+        if not name:
+            self._ts_next()
+            return
+        labels = self.win.settings.value("tailscale/labels", {}) or {}
+        labels = dict(labels) if isinstance(labels, dict) else {}
+        labels[ip] = name
+        self.win.settings.setValue("tailscale/labels", labels)
+        self.ts_msg.set(f"Setting up <b>{name}</b>…", "info")
+        run_job(ts_setup_tv, ts_key_load(), d.get("id"), pool=NET_POOL,
+                on_result=lambda _r: (log(f"Tailscale: {name} ({ip}) is set up as {TS_TAG}", "ok"), self._ts_next()),
+                on_error=lambda m: (self.ts_msg.set(f"Could not set up {name}: {m}", "bad"), self._ts_next()))
+
+    def ts_invite_dialog(self):
+        d = Dialog(self, "Invite a friend", 640)
+        d.lay.addWidget(label("Send this to your friend (Viber, WhatsApp, SMS). When the QR photo arrives, scan it with "
+                              "your phone and sign in with your Tailscale account; then press Find my Tailscale TVs.",
+                              "Muted", wrap=True))
+        box = QPlainTextEdit(INVITE_EL)
+        box.setObjectName("Box")
+        box.setMinimumHeight(300)
+        d.lay.addWidget(box)
+        el = button("Ελληνικά", "Ghost")
+        en = button("English", "Ghost")
+        cp = button("Copy", "Primary", "check")
+        el.clicked.connect(lambda: box.setPlainText(INVITE_EL))
+        en.clicked.connect(lambda: box.setPlainText(INVITE_EN))
+        cp.clicked.connect(lambda: (QApplication.clipboard().setText(box.toPlainText()), cp.setText("Copied ✓")))
+        d.lay.addWidget(hbox(el, en, None, cp))
+        d.buttons("Close", None)
+        d.exec()
+
+    def ts_key_dialog(self):
+        d = Dialog(self, "Tailscale API key", 600)
+        d.lay.addWidget(label(
+            f"With an API key this app sets each new TV up for you: <b>{TS_TAG}</b> and no key expiry, named as you "
+            f"like. Create one once in the admin console: <a href='{TS_KEYS_URL}'>Settings → Keys</a> → "
+            "<b>Generate access token</b> (you must be the tailnet's admin), and paste it here. It is kept for "
+            "this Windows user only (encrypted with Windows' own DPAPI). An access token expires after at most 90 days; "
+            "paste a new one then.", "Muted", wrap=True, rich=True))
+        lbl = d.lay.itemAt(d.lay.count() - 1).widget()
+        lbl.setOpenExternalLinks(True)
+        box = QLineEdit(ts_key_load())
+        box.setEchoMode(QLineEdit.EchoMode.Password)
+        box.setPlaceholderText("tskey-api-…")
+        d.lay.addWidget(box)
+        msg = Banner("", "info")
+        d.lay.addWidget(msg)
+        test = button("Test", None, "check")
+        forget = button("Forget key", "Ghost", "x")
+        d.lay.addWidget(hbox(test, forget, None))
+
+        def tested(devs):
+            msg.set(f"The key works: {len(devs)} device{'s' if len(devs) != 1 else ''} in your tailnet.", "ok")
+
+        test.clicked.connect(lambda: (msg.set("Checking…", "info"),
+                                      run_job(ts_devices, box.text().strip(), pool=NET_POOL, on_result=tested,
+                                              on_error=lambda m: msg.set(str(m), "bad"))))
+        forget.clicked.connect(lambda: (box.clear(), ts_key_save(""), msg.set("Forgotten.", "ok")))
+        d.buttons("Save", "Cancel")
+        if d.exec() == QDialog.DialogCode.Accepted:
+            k = box.text().strip()
+            if k and not k.startswith("tskey-"):
+                inform(self, "Not a Tailscale key", "A Tailscale API access token starts with <b>tskey-api-</b>.", "bad")
+                return
+            ts_key_save(k)
+            self.ts_msg.set("API key saved: new TVs are set up when you press <b>Find my Tailscale TVs</b>." if k
+                            else "API key removed.", "ok")
 
     def ts_connect(self):
         it = self.ts_list.currentItem()
@@ -2920,6 +3055,148 @@ def tailscale_peers():
     # TVs first (Android, ADB answering, online), then the rest
     peers.sort(key=lambda p: (not p["adb"], p["os"] != "android", not p["online"], p["name"].lower()))
     return {"state": state, "self": me, "peers": peers}
+
+
+# --- the Tailscale API: sets a new TV up (tag:tv, no key expiry), with an API key you create once ---------------
+TS_API = "https://api.tailscale.com/api/v2"
+TS_KEYS_URL = "https://login.tailscale.com/admin/settings/keys"
+TS_ACL_URL = "https://login.tailscale.com/admin/acls/file"
+TS_TAG = "tag:tv"
+# Only you reach the TVs, and only their ADB port; your own devices reach each other; a TV reaches nothing.
+TS_POLICY = {
+    "tagOwners": {TS_TAG: ["autogroup:admin"]},
+    "acls": [
+        {"action": "accept", "src": ["autogroup:member"], "dst": ["autogroup:self:*"]},
+        {"action": "accept", "src": ["autogroup:admin"], "dst": [TS_TAG + ":5555"]},
+    ],
+}
+
+
+def _dpapi(data, protect):
+    """Windows DPAPI: the key can only be read back by this Windows user on this PC."""
+    import ctypes
+    from ctypes import wintypes
+
+    class BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    buf = ctypes.create_string_buffer(data, len(data))
+    src, out = BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), BLOB()
+    fn = ctypes.windll.crypt32.CryptProtectData if protect else ctypes.windll.crypt32.CryptUnprotectData
+    if not fn(ctypes.byref(src), None, None, None, None, 0, ctypes.byref(out)):
+        raise OSError("DPAPI failed")
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(out.pbData)
+
+
+def ts_key_save(key):
+    import base64
+    st = QSettings("CleanYourTV", "CleanYourTV")
+    if not key:
+        st.remove("tailscale/api_key")
+        return
+    raw = key.encode()
+    if os.name == "nt":
+        st.setValue("tailscale/api_key", "dpapi:" + base64.b64encode(_dpapi(raw, True)).decode())
+    else:
+        st.setValue("tailscale/api_key", "b64:" + base64.b64encode(raw).decode())
+
+
+def ts_key_load():
+    import base64
+    v = QSettings("CleanYourTV", "CleanYourTV").value("tailscale/api_key", "") or ""
+    try:
+        if v.startswith("dpapi:"):
+            return _dpapi(base64.b64decode(v[6:]), False).decode()
+        if v.startswith("b64:"):
+            return base64.b64decode(v[4:]).decode()
+    except Exception:
+        return ""
+    return ""
+
+
+def ts_api(method, path, key, body=None, timeout=15):
+    """One call to the Tailscale API; the parsed JSON, or {} for an empty answer. Errors carry the API's message."""
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(TS_API + path, data=data, method=method, headers={
+        "Authorization": f"Bearer {key}", "User-Agent": f"CleanYourTV/{APP_VERSION}",
+        "Accept": "application/json", **({"Content-Type": "application/json"} if data else {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            txt = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8", "replace")).get("message", "")
+        except Exception:
+            msg = ""
+        if e.code in (401, 403):
+            raise RuntimeError(f"the API key was refused ({e.code}{': ' + msg if msg else ''}). Is it an API access "
+                               "token (tskey-api-…), not expired, from an admin of the tailnet?")
+        raise RuntimeError(f"Tailscale API {e.code}: {msg or e.reason}")
+    except OSError as e:
+        raise RuntimeError(f"could not reach the Tailscale API: {e}")
+    return json.loads(txt) if txt.strip() else {}
+
+
+def ts_devices(key):
+    if DEMO:
+        return [{"id": "d1", "name": "cosmote-box.tail1.ts.net", "hostname": "localhost", "os": "android",
+                 "addresses": ["100.101.7.21"], "tags": [], "keyExpiryDisabled": False},
+                {"id": "d2", "name": "sony-bravia-salon.tail1.ts.net", "hostname": "bravia", "os": "android",
+                 "addresses": ["100.88.12.4"], "tags": [TS_TAG], "keyExpiryDisabled": True}]
+    return ts_api("GET", "/tailnet/-/devices", key).get("devices", [])
+
+
+def ts_policy_ok(key):
+    """True when the tailnet's policy lets you own tag:tv (needed before a TV can be tagged)."""
+    if DEMO:
+        return True
+    pol = ts_api("GET", "/tailnet/-/acl", key)
+    return TS_TAG in (pol.get("tagOwners") or {})
+
+
+def ts_policy_set(key):
+    if not DEMO:
+        ts_api("POST", "/tailnet/-/acl", key, TS_POLICY)
+
+
+def ts_setup_tv(key, dev_id):
+    """tag:tv (the TV then reaches nothing, and you reach only its ADB port) and no key expiry."""
+    if DEMO:
+        time.sleep(0.3)
+        return
+    ts_api("POST", f"/device/{dev_id}/tags", key, {"tags": [TS_TAG]})
+    try:   # tagged devices normally have expiry off already; make sure
+        ts_api("POST", f"/device/{dev_id}/key", key, {"keyExpiryDisabled": True})
+    except RuntimeError:
+        pass
+
+
+INVITE_EL = (
+    "Γεια! Για να σου φτιάξω την TV από απόσταση, κάνε αυτά τα 4 (περίπου 5 λεπτά):\n\n"
+    "1) TV: Ρυθμίσεις → Σύστημα (ή Προτιμήσεις συσκευής) → Πληροφορίες → πάτα 7 φορές το «Έκδοση/Build» μέχρι να "
+    "γράψει ότι είσαι προγραμματιστής. Μετά Ρυθμίσεις → Επιλογές για προγραμματιστές → «Εντοπισμός σφαλμάτων USB» "
+    "ΟΝ (και «Εντοπισμός σφαλμάτων δικτύου/ADB» αν υπάρχει).\n"
+    "2) TV: Play Store → ψάξε «Tailscale» → Εγκατάσταση → Άνοιγμα.\n"
+    "3) Θα βγάλει έναν QR κωδικό: βγάλ' τον φωτογραφία και στείλ' τη μου.\n"
+    "4) Όταν σου πω, θα βγει στην TV «Να επιτρέπεται ο εντοπισμός σφαλμάτων USB;»: τσέκαρε «Να επιτρέπεται πάντα» "
+    "και πάτα ΟΚ.\n\n"
+    "Δεν χρειάζεσαι κωδικό ή λογαριασμό. Βλέπω μόνο την TV, τίποτε άλλο στο σπίτι σου, και το κλείνεις όποτε "
+    "θέλεις (απεγκατάσταση του Tailscale ή «Εντοπισμός σφαλμάτων USB» OFF)."
+)
+INVITE_EN = (
+    "Hi! So I can set your TV up from here, please do these 4 things (about 5 minutes):\n\n"
+    "1) TV: Settings → System (or Device Preferences) → About → press «Build» 7 times until it says you are a "
+    "developer. Then Settings → Developer options → «USB debugging» ON (and «Network/ADB debugging» if it has it).\n"
+    "2) TV: Play Store → search «Tailscale» → Install → Open.\n"
+    "3) It shows a QR code: take a photo of it and send it to me.\n"
+    "4) When I tell you, the TV asks «Allow USB debugging?»: tick «Always allow» and press OK.\n\n"
+    "You need no password or account. I can reach only the TV, nothing else in your home, and you can turn it off "
+    "any time (uninstall Tailscale, or USB debugging OFF)."
+)
 
 
 def _port_open(host, port, timeout=1.5):

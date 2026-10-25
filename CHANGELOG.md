@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1
+
+Connect → Tailscale: Invite a friend (the 4 steps as a ready message, Greek or English, to copy) and an API key (kept with Windows DPAPI): a new Android TV in your tailnet is named by you and set up on the next Find, tag:tv and no key expiry, so only you reach it and only its ADB port. The tag:tv rules are offered when missing.
+
 ## 1.4.0
 
 Connect: TV in another home (Tailscale). Find my Tailscale TVs lists the devices in your Tailscale network, TVs with ADB open first, and connects to the one you pick by its 100.x address; Steps for the TV has the one-time setup there, and Get Tailscale the download. Nothing is forwarded on a router.
