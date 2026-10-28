@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.4.3.pyw            normal mode
-    python CleanYourTV_v1.4.3.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.4.4.pyw            normal mode
+    python CleanYourTV_v1.4.4.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.4.4  Build & install: when the launcher on the TV carries another signature (built on another PC, or installed by
+         CleanYourTV Mobile) and Android refuses the update, the app offers to replace it: Home back to the stock
+         launcher, the other copy uninstalled, this build installed and made Home, the theme put back.
   1.4.3  Launcher: a Bluetooth button in the top bar (Extras, on by default): the paired headphones and speakers, the
          connected one marked, OK connects one again (or opens the TV's Bluetooth list where the firmware keeps that
          to itself), Search opens the TV's pairing screen. BLUETOOTH_CONNECT is granted at install.
@@ -105,7 +108,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -6056,6 +6059,33 @@ class ExtrasPage(Page):
 
         run_job(check, on_result=show, pool=NET_POOL)
 
+    def replace_foreign_launcher(self):
+        """The launcher on the TV is signed by another key (built on another PC, or installed by CleanYourTV Mobile),
+        so Android refuses this build over it. With the person's OK: Home goes back to the stock launcher, the other
+        copy is uninstalled, this build is installed and made Home again, and the theme put back."""
+        if not ask(self, "Replace the launcher on the TV?",
+                   "The CleanYourTV launcher on this TV was installed from <b>another computer or from CleanYourTV "
+                   "Mobile</b>, so it carries a different signature and Android will not let this build replace it."
+                   "<br><br>Replace it? Home goes back to the TV's own launcher for a moment, the other copy is "
+                   "uninstalled, then this build is installed and made Home again, and your theme put back. Lost: the "
+                   "launcher's own on-TV choices (hidden channels, channel order, app order).", "Replace", "Danger"):
+            self._say("Left as it was: the other launcher stays on the TV.")
+            return
+        prev = self.win.settings.value(f"dream_prev/{TV.host}", "") or ""
+        self._theme_after = self.win.settings.value(f"theme_applied/{TV.host}", "") or ""
+        self._say("\nRemoving the other copy of the launcher (Home goes to the stock launcher first)…")
+
+        def done(res):
+            stock, steps = res
+            for d in steps:
+                self._say("  " + d)
+            self._say("Installing this build…")
+            self._reinstall = True
+            self.build_install()
+
+        run_job(remove_new_launcher, "", prev, on_result=done,
+                on_error=lambda m: self._say(f"Could not remove the other copy: {m}"))
+
     def build_install(self):
         if not self.need_tv():
             return
@@ -6072,7 +6102,9 @@ class ExtrasPage(Page):
             inform(self, "CVTE board", "On a CVTE board, install the launcher without key helpers first, reboot "
                    "once and check Home and ADB come back. Enable a helper in a later pass (#741).", "warn")
             return
-        if not ask(self, "Build and install the launcher?",
+        again = getattr(self, "_reinstall", False)
+        self._reinstall = False
+        if not again and not ask(self, "Build and install the launcher?",
                    "This builds the launcher with Gradle (a few minutes the first time), installs it, makes it Home "
                    "and disables the stock launcher. If Home does not end up on the new launcher, the script "
                    "re-enables the stock one.", "Build & install"):
@@ -6347,6 +6379,15 @@ class ExtrasPage(Page):
                         inform(self, "The launcher crashed", "The new launcher stopped with an error on the TV. "
                                "The details are in the build log: send them over.", "warn")
                 run_job(check, on_result=checked)
+            if code != 0 and "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in self.out.toPlainText()[-4000:]:
+                QTimer.singleShot(0, self.replace_foreign_launcher)
+                return
+            if code == 0 and getattr(self, "_theme_after", ""):
+                folder, self._theme_after = self._theme_after, ""
+                if Path(folder, "config.json").is_file():
+                    self._say(f"Putting your theme back: {Path(folder).name}")
+                    run_job(apply_theme, folder, on_result=lambda _s: self._say("Theme back on."),
+                            on_error=lambda m: self._say(f"Theme: {m} (apply it again from Themes)"))
             self.refresh()
             BUS.packages_changed.emit()
             hook = getattr(self, "on_build_finished", None)   # a bundle set-up waits for the launcher

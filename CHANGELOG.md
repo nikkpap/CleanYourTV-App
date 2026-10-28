@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.4
+
+Build & install: when the launcher on the TV carries another signature (built on another PC, or installed by CleanYourTV Mobile) and Android refuses the update, the app offers to replace it: Home back to the stock launcher, the other copy uninstalled, this build installed and made Home, the theme put back.
+
 ## 1.4.3
 
 Launcher: a Bluetooth button in the top bar (Extras, on by default): the paired headphones and speakers, the connected one marked, OK connects one again (or opens the TV's Bluetooth list where the firmware keeps that to itself), Search opens the TV's pairing screen. BLUETOOTH_CONNECT is granted at install.
