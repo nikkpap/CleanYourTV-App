@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.3
+
+Launcher: a Bluetooth button in the top bar (Extras, on by default): the paired headphones and speakers, the connected one marked, OK connects one again (or opens the TV's Bluetooth list where the firmware keeps that to itself), Search opens the TV's pairing screen. BLUETOOTH_CONNECT is granted at install.
+
 ## 1.4.2
 
 The undo list is also kept on the TV (/data/local/tmp/tidytv/disabled.txt, the same file TidyTV keeps), written before each change. Restore adds what is on it but not in this PC's record, so it works from any PC, and puts back what TidyTV turned off or removed too.
