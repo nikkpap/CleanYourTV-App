@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.5
+
+Launcher: a Wi-Fi menu like the Bluetooth one (Extras, on by default): OK on the Wi-Fi pill lists the network the TV is on and the ones around with their signal, Ethernet when on a cable, and Wi-Fi settings; a network opens the settings, where joining is one press. Hold OK as before.
+
 ## 1.4.4
 
 Build & install: when the launcher on the TV carries another signature (built on another PC, or installed by CleanYourTV Mobile) and Android refuses the update, the app offers to replace it: Home back to the stock launcher, the other copy uninstalled, this build installed and made Home, the theme put back.
