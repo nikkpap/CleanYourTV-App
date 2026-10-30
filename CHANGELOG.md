@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.6
+
+The launcher speaks the TV's language everywhere: all of its own text in Greek (it ships no Greek of its own; "Remove from Home" was English), and CleanYourTV's additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi menus) in all 30 languages the launcher has. Android picks them by the system language.
+
 ## 1.5.5
 
 Themes: "Icon-only top buttons" makes the Inputs pill round too (icon_only_inputs), in My theme and for any theme applied with icon-only buttons that doesn't say otherwise. The themes in themes/ say so too.
