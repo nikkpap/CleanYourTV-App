@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.4
+
+Themes: Edit and Delete for every theme. Edit loads it into My theme; Save & apply then saves it back under its name (a toolkit theme as "<name>-mine", since toolkit updates replace those). Delete removes one of your themes; a toolkit theme is hidden instead, and Show hidden brings it back.
+
 ## 1.5.3
 
 Extras: "Turn the TV's Location on" (with the Wi-Fi menu, on by default) so the menu shows the network names and the networks around; the TV's own value is recorded and Restore puts it back. Bluetooth menu: two paired devices with the same name (an old and a new remote) show the end of their address. Wi-Fi menu a bit wider.

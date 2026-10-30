@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.3.pyw            normal mode
-    python CleanYourTV_v1.5.3.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.4.pyw            normal mode
+    python CleanYourTV_v1.5.4.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.4  Themes: Edit and Delete for every theme. Edit loads it into My theme; Save & apply then saves it back under
+         its name (a toolkit theme as "<name>-mine", since toolkit updates replace those). Delete removes one of your
+         themes; a toolkit theme is hidden instead, and Show hidden brings it back.
   1.5.3  Extras: "Turn the TV's Location on" (with the Wi-Fi menu, on by default) so the menu shows the network names
          and the networks around; the TV's own value is recorded and Restore puts it back. Bluetooth menu: two paired
          devices with the same name (an old and a new remote) show the end of their address. Wi-Fi menu a bit wider.
@@ -124,7 +127,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -6827,6 +6830,14 @@ class ThemesPage(Page):
         self.apply_btn.setEnabled(False)
         self.import_btn = button("Add themes…", "Ghost", "palette", "Add themes from a .zip into " + str(USER_THEMES))
         self.folder_btn = button("Folder", "Ghost", "folder", "Open " + str(USER_THEMES))
+        self.edit_btn = button("Edit", "Ghost", "palette", "Load the selected theme into My theme below to change it")
+        self.del_btn = button("Delete", "Ghost", "x", "Delete one of your themes, or hide one of the toolkit's")
+        self.unhide_btn = button("Show hidden", "Ghost", "undo", "Show the toolkit themes you hid again")
+        for b in (self.edit_btn, self.del_btn):
+            b.setEnabled(False)
+        top.addWidget(self.edit_btn)
+        top.addWidget(self.del_btn)
+        top.addWidget(self.unhide_btn)
         top.addWidget(self.import_btn)
         top.addWidget(self.folder_btn)
         top.addWidget(self.reset_btn)
@@ -6981,6 +6992,9 @@ class ThemesPage(Page):
         self.from_sel.clicked.connect(self.start_from_selected)
         self.json_btn.clicked.connect(self.edit_json)
         self.import_btn.clicked.connect(self.import_themes)
+        self.edit_btn.clicked.connect(self.edit_theme)
+        self.del_btn.clicked.connect(self.delete_theme)
+        self.unhide_btn.clicked.connect(self.unhide_themes)
         self.folder_btn.clicked.connect(self.open_theme_folder)
         self.my_apply.clicked.connect(self.save_apply)
         add.clicked.connect(self.add_app)
@@ -6994,7 +7008,17 @@ class ThemesPage(Page):
             self.grid.removeWidget(cd)
             cd.deleteLater()
         self.cards = []
-        themes = load_themes()
+        hidden = set(self.win.settings.value("hidden_themes", [], list) or [])
+        themes = [t for t in load_themes() if t.get("mine") or t["name"] not in hidden]
+        if hasattr(self, "unhide_btn"):
+            self.unhide_btn.setVisible(bool(hidden))
+            self.unhide_btn.setText(f"Show hidden ({len(hidden)})")
+        if self.selected and not any(t["path"] == self.selected["path"] for t in themes):
+            self.selected = None
+            self.apply_btn.setEnabled(False)
+            self.apply_btn.setText("Apply to TV")
+            self.edit_btn.setEnabled(False)
+            self.del_btn.setEnabled(False)
         for i, t in enumerate(themes):
             cd = ThemeCard(t)
             cd.clicked.connect(self.pick)
@@ -7005,6 +7029,50 @@ class ThemesPage(Page):
             t = next((c.theme for c in self.cards if c.theme.get("mine") and c.theme["name"] == select), None)
             if t:
                 self.pick(t)
+
+    def edit_theme(self):
+        """The selected theme into My theme below; Save & apply then offers to keep it under the same name."""
+        if not self.selected:
+            return
+        self.start_from_selected()
+        t = self.selected
+        self._editing = (t["name"] if t["path"] != MY_THEME else "") if t.get("mine") else t["name"] + "-mine"
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+    def delete_theme(self):
+        t = self.selected
+        if not t:
+            return
+        if t.get("mine"):
+            if not ask(self, "Delete theme?", f"Delete <b>{t['name']}</b> from {USER_THEMES}? Its wallpapers go with it. "
+                       "A theme already on a TV stays there until you apply another one.", "Delete", "Danger"):
+                return
+            try:
+                shutil.rmtree(t["path"])
+            except OSError as e:
+                inform(self, "Could not delete", str(e), "bad")
+                return
+            if t["path"] == MY_THEME:
+                self.base = {}
+            self.status.set(f"Deleted <b>{t['name']}</b>.", "ok")
+        else:
+            if not ask(self, "Hide theme?", f"<b>{t['name']}</b> comes with the toolkit, so it is hidden from the "
+                       "gallery rather than deleted (a toolkit update would bring the file back). <b>Show hidden</b> "
+                       "brings it back. To change it instead, press <b>Edit</b>: your copy is kept with your themes.",
+                       "Hide", "Danger"):
+                return
+            hidden = list(self.win.settings.value("hidden_themes", [], list) or [])
+            if t["name"] not in hidden:
+                hidden.append(t["name"])
+            self.win.settings.setValue("hidden_themes", hidden)
+            self.status.set(f"Hid <b>{t['name']}</b>. Show hidden brings it back.", "ok")
+        self.selected = None
+        self.fill_gallery()
+
+    def unhide_themes(self):
+        self.win.settings.setValue("hidden_themes", [])
+        self.fill_gallery()
+        self.status.set("The toolkit's themes are all shown again.", "ok")
 
     def import_themes(self):
         f, _ = QFileDialog.getOpenFileName(self, "Add themes", str(Path.home() / "Downloads"),
@@ -7031,6 +7099,9 @@ class ThemesPage(Page):
             cd.set_selected(cd.theme is theme)
         self.apply_btn.setEnabled(True)
         self.apply_btn.setText(f"Apply “{theme['name']}”")
+        self.edit_btn.setEnabled(True)
+        self.del_btn.setEnabled(True)
+        self.del_btn.setText("Delete" if theme.get("mine") else "Hide")
 
     def on_connection(self, ok, info):
         if not ok:
@@ -7177,6 +7248,7 @@ class ThemesPage(Page):
         except ValueError as e:
             inform(self, "Broken theme", str(e), "bad")
             return
+        self._editing = ""
         cfg.pop("hidden_apps", None)   # another person's TV; your hidden apps differ
         self._fill(cfg, self.selected["path"] / "wallpaper.jpg")
         self._copy_walls = self.selected["path"] / "wallpapers"
@@ -7277,14 +7349,18 @@ class ThemesPage(Page):
         (MY_THEME / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         self.base = cfg
         self.my_msg.set(f"Saved to {MY_THEME}.", "ok")
+        editing = getattr(self, "_editing", "")
         name = ask_name(self, "Keep it as a theme?",
-                        f"My theme is saved. Keep a copy under a name of its own in <b>{USER_THEMES}</b>, so it stays "
-                        "in the gallery after you change My theme again?",
-                        self.win.settings.value("my_theme_name", ""), "Keep a copy", "Not now")
+                        (f"Save your changes to <b>{editing}</b> in {USER_THEMES}? Or type another name for a new theme."
+                         if editing else
+                         f"My theme is saved. Keep a copy under a name of its own in <b>{USER_THEMES}</b>, so it stays "
+                         "in the gallery after you change My theme again?"),
+                        editing or self.win.settings.value("my_theme_name", ""), "Save" if editing else "Keep a copy",
+                        "Not now")
         if name:
             safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-.") or "my-theme-copy"
             dest = USER_THEMES / safe
-            if safe == MY_THEME.name or not dest.exists() or ask(
+            if safe == MY_THEME.name or not dest.exists() or safe == editing or ask(
                     self, "Replace theme?", f"A theme called <b>{safe}</b> exists. Replace it?", "Replace"):
                 if dest != MY_THEME:
                     shutil.rmtree(dest, ignore_errors=True)
