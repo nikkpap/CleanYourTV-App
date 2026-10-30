@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.3
+
+Extras: "Turn the TV's Location on" (with the Wi-Fi menu, on by default) so the menu shows the network names and the networks around; the TV's own value is recorded and Restore puts it back. Bluetooth menu: two paired devices with the same name (an old and a new remote) show the end of their address. Wi-Fi menu a bit wider.
+
 ## 1.5.2
 
 Wi-Fi menu: the network in use always shows, as "Wi-Fi (name hidden)" when Android keeps the name back, and a row opens Location when it is off (Android shows Wi-Fi names and nearby networks only with Location on). The launcher gets location access at install.
