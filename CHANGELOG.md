@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.2
+
+Wi-Fi menu: the network in use always shows, as "Wi-Fi (name hidden)" when Android keeps the name back, and a row opens Location when it is off (Android shows Wi-Fi names and nearby networks only with Location on). The launcher gets location access at install.
+
 ## 1.5.1
 
 Fix: after one build without the additions, the next one could never add them again (the Hold-OK switch had already changed the line the Bluetooth/Wi-Fi switches hook onto). They now hook onto a line no switch changes.
