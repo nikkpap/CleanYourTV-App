@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.5
+
+Themes: "Icon-only top buttons" makes the Inputs pill round too (icon_only_inputs), in My theme and for any theme applied with icon-only buttons that doesn't say otherwise. The themes in themes/ say so too.
+
 ## 1.5.4
 
 Themes: Edit and Delete for every theme. Edit loads it into My theme; Save & apply then saves it back under its name (a toolkit theme as "<name>-mine", since toolkit updates replace those). Delete removes one of your themes; a toolkit theme is hidden instead, and Show hidden brings it back.

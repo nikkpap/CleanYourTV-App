@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.4.pyw            normal mode
-    python CleanYourTV_v1.5.4.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.5.pyw            normal mode
+    python CleanYourTV_v1.5.5.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.5  Themes: "Icon-only top buttons" makes the Inputs pill round too (icon_only_inputs), in My theme and for any
+         theme applied with icon-only buttons that doesn't say otherwise.
   1.5.4  Themes: Edit and Delete for every theme. Edit loads it into My theme; Save & apply then saves it back under
          its name (a toolkit theme as "<name>-mine", since toolkit updates replace those). Delete removes one of your
          themes; a toolkit theme is hidden instead, and Show hidden brings it back.
@@ -127,7 +129,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.4"
+APP_VERSION = "1.5.5"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -6567,7 +6569,14 @@ THEME_NOTES = []   # what the last apply_theme() wants the Themes page to say
 def apply_theme(folder):
     folder = Path(folder)
     cfg = folder / "config.json"
-    json.loads(cfg.read_text(encoding="utf-8"))   # refuse broken JSON before touching the TV
+    data = json.loads(cfg.read_text(encoding="utf-8"))   # refuse broken JSON before touching the TV
+    if isinstance(data, dict) and data.get("icon_only_buttons") and "icon_only_inputs" not in data:
+        # Icon-only top buttons means all of them: the Inputs pill goes round too, unless the theme says otherwise.
+        data["icon_only_inputs"] = True
+        tmp_cfg = DATA / "theme-push" / "config.json"
+        tmp_cfg.parent.mkdir(parents=True, exist_ok=True)
+        tmp_cfg.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        cfg = tmp_cfg
     if not launcher_installed():
         raise RuntimeError("The CleanYourTV launcher is not installed on this TV. Install it on the Extras page first.")
     TV.sh(f"mkdir -p {THEME_DIR} 2>/dev/null; true", quiet=True)
@@ -6958,7 +6967,7 @@ class ThemesPage(Page):
             ("cinematic_home", "Cinematic top shelf", "The focused dock app's artwork fills the top of the screen"),
             ("dock_glass", "Frosted-glass dock", "Suits a wallpaper"),
             ("app_glow", "Glow in the app's colour", "The focus highlight glows in each app's colour"),
-            ("icon_only_buttons", "Icon-only top buttons", "Wi-Fi and Settings as round icons"),
+            ("icon_only_buttons", "Icon-only top buttons", "Inputs, Wi-Fi and Settings as round icons"),
             ("app_library", "App library", "An App library pill to add or remove apps from Home"),
             ("show_stats", "CPU / memory line", "One line under the clock with CPU, free memory and storage"),
             ("live_tv_row", "Live TV channels row", "A row of the tuner's channels after the apps, like the stock "
@@ -7277,6 +7286,8 @@ class ThemesPage(Page):
         for k, cb in self.switches.items():
             if cb.isChecked() or k in cfg:
                 cfg[k] = cb.isChecked()
+        if "icon_only_buttons" in cfg:   # Inputs goes round with the others
+            cfg["icon_only_inputs"] = cfg["icon_only_buttons"]
         cfg["wallpaper"] = bool(self.wall_src)
         if cfg.get("live_tv_row"):
             cfg["live_tv_row_position"] = self.win.settings.value("live_pos", "top")
