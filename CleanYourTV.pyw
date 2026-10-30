@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.4.6.pyw            normal mode
-    python CleanYourTV_v1.4.6.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.0.pyw            normal mode
+    python CleanYourTV_v1.5.0.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.0  Updates over the internet: at start (in the background) and with About → Check for updates, the app looks for
+         a newer CleanYourTV on GitHub, shows what is new and, with your OK, saves it next to this file as
+         CleanYourTV_v<version>.pyw and opens it in place of this window. A switch in About turns the start check off.
   1.4.6  The launcher additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi menus) fit the toolkit's newest launcher
          again: its top-bar apps now take launch actions, which moved the line the Bluetooth button hooks onto.
   1.4.5  Launcher: a Wi-Fi menu like the Bluetooth one (Extras, on by default): OK on the Wi-Fi pill lists the network
@@ -113,7 +116,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.5.0"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -8191,6 +8194,78 @@ def make_shortcuts(force=False):
     return ok
 
 
+# ----------------------------------------------------------------------------------------------
+# App updates (OTA): the newest CleanYourTV from GitHub, saved next to this one and started in its place
+# ----------------------------------------------------------------------------------------------
+APP_UPDATE_URL = "https://raw.githubusercontent.com/nikkpap/CleanYourTV-App/main/CleanYourTV.pyw"
+APP_CHANGES_URL = "https://raw.githubusercontent.com/nikkpap/CleanYourTV-App/main/CHANGELOG.md"
+APP_PAGE = "https://github.com/nikkpap/CleanYourTV-App"
+
+
+def _ver(v):
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return (0,)
+
+
+def app_update_check():
+    """(version, text, notes) of a newer CleanYourTV on GitHub, or None when this one is the newest."""
+    with _http(APP_UPDATE_URL, timeout=20) as r:
+        text = r.read().decode("utf-8")
+    m = re.search(r'^APP_VERSION = "([0-9.]+)"', text, re.M)
+    if not m:
+        raise RuntimeError("the file on GitHub has no version")
+    ver = m.group(1)
+    if _ver(ver) <= _ver(APP_VERSION):
+        return None
+    compile(text, f"CleanYourTV_v{ver}.pyw", "exec")   # a download cut short never gets started
+    notes = ""
+    try:
+        with _http(APP_CHANGES_URL, timeout=10) as r:
+            ch = r.read().decode("utf-8")
+        parts = re.split(r"^## ", ch, flags=re.M)
+        news = [p for p in parts[1:] if _ver(p.split()[0]) > _ver(APP_VERSION)]
+        notes = "\n\n".join("• " + p.strip().replace("\n\n", "\n") for p in news[:6])
+    except Exception:
+        pass
+    return ver, text, notes
+
+
+def app_update_install(ver, text):
+    """Saves CleanYourTV_v<ver>.pyw next to this file and starts it; the newer copy makes this one close (1.3.9+)."""
+    dest = HERE / f"CleanYourTV_v{ver}.pyw"
+    tmp = dest.with_suffix(".pyw.part")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, dest)
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([_gui_python(), str(dest)], cwd=str(HERE), close_fds=True,
+                     creationflags=flags if os.name == "nt" else 0)
+    return dest
+
+
+def offer_app_update(parent, res, quiet=False):
+    """Asks to update when res names a newer version; with quiet, says nothing when there is none."""
+    if not res:
+        if not quiet:
+            inform(parent, "No update", f"{APP_NAME} {APP_VERSION} is the newest version.", "ok")
+        return
+    ver, text, notes = res
+    body = (f"<b>{APP_NAME} {ver}</b> is out (you have {APP_VERSION}).<br><br>" +
+            (notes.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br>") + "<br><br>" if notes else "") +
+            "Update now? It is saved next to this file as <b>CleanYourTV_v" + ver + ".pyw</b> and opens in place of "
+            "this window; your settings, profiles and themes stay. The old file stays too, in case you want it back.")
+    if not ask(parent, "Update CleanYourTV?", body, "Update now"):
+        return
+    try:
+        dest = app_update_install(ver, text)
+    except Exception as e:
+        inform(parent, "Update failed", f"Could not save the new version: {e}", "bad")
+        return
+    log(f"updated: {dest.name} is starting", "ok")
+    QTimer.singleShot(8000, QApplication.quit)   # in case the new copy cannot ask this one to close
+
+
 class AboutDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -8269,6 +8344,22 @@ class AboutDialog(QDialog):
         auto.setChecked(st.value("auto_connect", "true") == "true")
         auto.toggled.connect(lambda v: st.setValue("auto_connect", "true" if v else "false"))
         lay.addWidget(auto)
+
+        upd = Toggle("Check for a new CleanYourTV when the app starts")
+        upd.setToolTip(f"Looks at {APP_PAGE} once at start, in the background, and asks before updating.")
+        upd.setChecked(st.value("app_update_check", "true") == "true")
+        upd.toggled.connect(lambda v: st.setValue("app_update_check", "true" if v else "false"))
+        now = button("Check for updates", None, "refresh", "Look on GitHub for a newer CleanYourTV now")
+
+        def check_now():
+            now.setEnabled(False)
+            now.setText("Checking…")
+            run_job(app_update_check, pool=NET_POOL, on_result=lambda r: offer_app_update(self, r),
+                    on_error=lambda m: inform(self, "Could not check", f"GitHub did not answer: {m}", "warn"),
+                    on_done=lambda: (now.setEnabled(True), now.setText("Check for updates")))
+
+        now.clicked.connect(check_now)
+        lay.addWidget(hbox(upd, None, now))
 
         # Toolkit zips: the newest for use and the one before as a backup
         keep = Toggle("Keep the toolkit as zip files on this PC: the newest and the one before")
@@ -8565,6 +8656,10 @@ def main():
             download_toolkit_update, pool=NET_POOL, on_error=lambda m: log(f"toolkit update check: {m}", "warn"),
             on_result=lambda sha: sha and log(f"a toolkit update ({sha[:7]}) was downloaded; it is used from the "
                                               "next start of the app", "ok")))
+    if not DEMO and win.settings.value("app_update_check", "true") == "true":
+        QTimer.singleShot(6000, lambda: run_job(
+            app_update_check, pool=NET_POOL, on_result=lambda r: offer_app_update(win, r, quiet=True),
+            on_error=lambda m: log(f"app update check: {m}", "warn")))
     if win.settings.value("auto_connect", "true") == "true" or DEMO:
         QTimer.singleShot(500, win.page_list[0].auto_connect)
     if not DEMO:   # once per location of this file; quietly, in the background

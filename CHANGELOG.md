@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.0
+
+Updates over the internet: at start (in the background) and with About → Check for updates, the app looks for a newer CleanYourTV on GitHub, shows what is new and, with your OK, saves it next to this file as CleanYourTV_v<version>.pyw and opens it in place of this window. A switch in About turns the start check off.
+
 ## 1.4.6
 
 The launcher additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi menus) fit the toolkit's newest launcher again: its top-bar apps now take launch actions, which moved the line the Bluetooth button hooks onto.
