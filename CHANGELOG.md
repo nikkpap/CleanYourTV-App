@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.6
+
+The launcher additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi menus) fit the toolkit's newest launcher again: its top-bar apps now take launch actions, which moved the line the Bluetooth button hooks onto.
+
 ## 1.4.5
 
 Launcher: a Wi-Fi menu like the Bluetooth one (Extras, on by default): OK on the Wi-Fi pill lists the network the TV is on and the ones around with their signal, Ethernet when on a cable, and Wi-Fi settings; a network opens the settings, where joining is one press. Hold OK as before.

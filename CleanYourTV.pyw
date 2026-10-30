@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.4.5.pyw            normal mode
-    python CleanYourTV_v1.4.5.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.4.6.pyw            normal mode
+    python CleanYourTV_v1.4.6.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.4.6  The launcher additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi menus) fit the toolkit's newest launcher
+         again: its top-bar apps now take launch actions, which moved the line the Bluetooth button hooks onto.
   1.4.5  Launcher: a Wi-Fi menu like the Bluetooth one (Extras, on by default): OK on the Wi-Fi pill lists the network
          the TV is on and the ones around with their signal, Ethernet when on a cable, and Wi-Fi settings; a network
          opens the settings, where joining is one press (Android keeps connecting to itself). Hold OK as before.
@@ -111,7 +113,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -4981,8 +4983,8 @@ LIVETV_EDITS = [
      '    <bool name="tile_menu">false</bool>\n',
      '    <bool name="tile_menu">false</bool>\n    <!-- A round Bluetooth pill left of the network pill: OK lists the paired devices (headphones and speakers first,\n         the connected one marked), a press connects one again, and Search opens the TV\'s pairing screen. Needs\n         BLUETOOTH_CONNECT on Android 12+, granted over ADB. Off by default; a theme can set "bluetooth_pill". -->\n    <bool name="bluetooth_pill">false</bool>\n    <!-- OK on the Wi-Fi pill drops a menu like the Bluetooth one: the network the TV is on, the networks around with\n         their signal, and Wi-Fi settings (a network opens the settings, where joining is one press). Hold OK keeps\n         opening the settings. Off by default; a theme can set "wifi_menu". -->\n    <bool name="wifi_menu">false</bool>\n'),
     ('java/com/gathin/tvhome/MainActivity.java',
-     '        addTopBarApps(cfg.topBarApps);\n',
-     '        addTopBarApps(cfg.topBarApps);\n        if (BluetoothMenu.enabled(this)) addBluetoothPill();\n        if (WifiMenu.enabled(this) && vpnApp.isEmpty()) btnWifi.setOnClickListener(this::showWifiMenu);\n'),
+     '        addTopBarApps(cfg.topBarApps',
+     '        if (BluetoothMenu.enabled(this)) addBluetoothPill();\n        if (WifiMenu.enabled(this) && vpnApp.isEmpty()) btnWifi.setOnClickListener(this::showWifiMenu);\n        addTopBarApps(cfg.topBarApps'),
     ('java/com/gathin/tvhome/MainActivity.java',
      '    protected void onDestroy() {\n        super.onDestroy();\n',
      '    protected void onDestroy() {\n        super.onDestroy();\n        if (bluetooth != null) bluetooth.close();\n'),
