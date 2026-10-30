@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.0.pyw            normal mode
-    python CleanYourTV_v1.5.0.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.1.pyw            normal mode
+    python CleanYourTV_v1.5.1.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.1  Fix: after one build without the additions, the next one could never add them again (the Hold-OK switch had
+         already changed the line the Bluetooth/Wi-Fi switches hook onto). They now hook onto a line no switch changes.
   1.5.0  Updates over the internet: at start (in the background) and with About → Check for updates, the app looks for
          a newer CleanYourTV on GitHub, shows what is new and, with your OK, saves it next to this file as
          CleanYourTV_v<version>.pyw and opens it in place of this window. A switch in About turns the start check off.
@@ -116,7 +118,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -4983,8 +4985,8 @@ LIVETV_EDITS = [
      '    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n',
      '    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <!-- bluetooth_pill: the paired headphones and speakers, and connecting one again (BluetoothMenu).\n         BLUETOOTH_CONNECT is a runtime permission on Android 12+, granted with pm grant by CleanYourTV. -->\n    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n'),
     ('res/values/config.xml',
-     '    <bool name="tile_menu">false</bool>\n',
-     '    <bool name="tile_menu">false</bool>\n    <!-- A round Bluetooth pill left of the network pill: OK lists the paired devices (headphones and speakers first,\n         the connected one marked), a press connects one again, and Search opens the TV\'s pairing screen. Needs\n         BLUETOOTH_CONNECT on Android 12+, granted over ADB. Off by default; a theme can set "bluetooth_pill". -->\n    <bool name="bluetooth_pill">false</bool>\n    <!-- OK on the Wi-Fi pill drops a menu like the Bluetooth one: the network the TV is on, the networks around with\n         their signal, and Wi-Fi settings (a network opens the settings, where joining is one press). Hold OK keeps\n         opening the settings. Off by default; a theme can set "wifi_menu". -->\n    <bool name="wifi_menu">false</bool>\n'),
+     '    <!-- Hold OK on a tile opens a small menu:',
+     '    <!-- A round Bluetooth pill left of the network pill: OK lists the paired devices (headphones and speakers first,\n         the connected one marked), a press connects one again, and Search opens the TV\'s pairing screen. Needs\n         BLUETOOTH_CONNECT on Android 12+, granted over ADB. Off by default; a theme can set "bluetooth_pill". -->\n    <bool name="bluetooth_pill">false</bool>\n    <!-- OK on the Wi-Fi pill drops a menu like the Bluetooth one: the network the TV is on, the networks around with\n         their signal, and Wi-Fi settings (a network opens the settings, where joining is one press). Hold OK keeps\n         opening the settings. Off by default; a theme can set "wifi_menu". -->\n    <bool name="wifi_menu">false</bool>\n    <!-- Hold OK on a tile opens a small menu:'),
     ('java/com/gathin/tvhome/MainActivity.java',
      '        addTopBarApps(cfg.topBarApps',
      '        if (BluetoothMenu.enabled(this)) addBluetoothPill();\n        if (WifiMenu.enabled(this) && vpnApp.isEmpty()) btnWifi.setOnClickListener(this::showWifiMenu);\n        addTopBarApps(cfg.topBarApps'),

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1
+
+Fix: after one build without the additions, the next one could never add them again (the Hold-OK switch had already changed the line the Bluetooth/Wi-Fi switches hook onto). They now hook onto a line no switch changes.
+
 ## 1.5.0
 
 Updates over the internet: at start (in the background) and with About → Check for updates, the app looks for a newer CleanYourTV on GitHub, shows what is new and, with your OK, saves it next to this file as CleanYourTV_v<version>.pyw and opens it in place of this window. A switch in About turns the start check off.
