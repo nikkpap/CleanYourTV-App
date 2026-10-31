@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1
+
+Pair a TV: when this PC cannot reach the TV's pairing port it says why (a VPN such as a Tailscale exit node or subnets carrying the traffic, the PC on another network, the router keeping Wi-Fi devices apart, the port closed, or security software dropping it). A **Copy debug report** button puts adb, mDNS, ping, port, route, network, firewall and antivirus details in the clipboard (and pair-debug.txt) to paste to whoever helps.
+
 ## 1.6.0
 
 Pair a TV: a **Fix Windows Firewall for adb** button (one administrator prompt) removes Windows Firewall rules that block adb.exe, allows adb in and out on every network type plus the TVs' mDNS, and marks the TV's network Private if Windows had it as Public. A failed pairing now says what on the PC may be in the way (blocking rules, a Public network, another antivirus), first checks that the TV's pairing port answers, and no longer retries with a code the TV may have dropped. The whole message is shown.

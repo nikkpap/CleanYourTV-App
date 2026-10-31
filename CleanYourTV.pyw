@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.6.0.pyw            normal mode
-    python CleanYourTV_v1.6.0.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.1.pyw            normal mode
+    python CleanYourTV_v1.6.1.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,10 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.1  Pair a TV: when this PC cannot reach the TV's pairing port it says why (a VPN such as a Tailscale exit node
+         or subnets carrying the traffic, the PC on another network, the router keeping Wi-Fi devices apart, the
+         port closed, or security software dropping it), and a Copy debug report button puts adb, mDNS, ping, port,
+         route, network, firewall and antivirus details in the clipboard to paste to whoever helps.
   1.6.0  Pair a TV: a "Fix Windows Firewall for adb" button (one administrator prompt) removes Windows Firewall rules
          that block adb.exe, allows adb in and out on every network type plus the TVs' mDNS, and marks the TV's
          network Private if Windows had it as Public. A failed pairing now says what on the PC may be in the way
@@ -148,7 +152,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -330,6 +334,7 @@ os.environ["QT_LOGGING_RULES"] = ";".join(filter(None, [os.environ.get("QT_LOGGI
 
 # ----------------------------------------------------------------------------------------------
 import contextlib
+import html
 import io
 import ipaddress
 import json
@@ -2607,6 +2612,146 @@ def network_check(ip):
     return found
 
 
+def tcp_probe(host, port, timeout=3):
+    """"open", "refused" (the TV answered: nothing listens there) or "timeout" (no answer at all)."""
+    if DEMO:
+        return "open"
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return "open"
+    except ConnectionRefusedError:
+        return "refused"
+    except (socket.timeout, TimeoutError):
+        return "timeout"
+    except OSError as e:
+        return "refused" if getattr(e, "winerror", 0) == 10061 or e.errno in (111, 61) else f"error: {e}"
+
+
+def _route_to(ip):
+    """(adapter, this PC's address) Windows uses to send to ip."""
+    if os.name != "nt" or DEMO:
+        return "", ""
+    out = _ps("$ErrorActionPreference='SilentlyContinue';"
+              f"$r=Find-NetRoute -RemoteIPAddress {_ps_quote(ip)};"
+              "Write-Output ('IF=' + (($r | Where-Object {$_.InterfaceAlias} | Select-Object -First 1).InterfaceAlias));"
+              "Write-Output ('ME=' + (($r | Where-Object {$_.IPAddress} | Select-Object -First 1).IPAddress))", 40)
+    route = mine = ""
+    for line in out.splitlines():
+        k, _, v = line.partition("=")
+        if k == "IF":
+            route = v.strip()
+        elif k == "ME":
+            mine = v.strip()
+    return route, mine
+
+
+def _ping(ip):
+    """(answered, output)"""
+    if DEMO:
+        return True, "demo"
+    try:
+        p = subprocess.run(["ping", "-n" if os.name == "nt" else "-c", "2", ip], capture_output=True, text=True,
+                           timeout=15, creationflags=NO_WINDOW, errors="replace")
+        return p.returncode == 0 and "ttl=" in p.stdout.lower(), p.stdout.strip()
+    except Exception as e:   # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
+VPN_RE = re.compile(r"tailscale|vpn|wireguard|openvpn|\btap\b|\btun\b|zerotier|hamachi|nord|proton|express|cisco|"
+                    r"forti|radmin", re.I)
+
+
+def reach_check(ip, port):
+    """Why this PC cannot reach the TV's pairing port: the way Windows sends to the TV (a VPN such as Tailscale with
+    an exit node or another network's routes, a second adapter), whether the TV answers a ping, and how the port
+    answers. Returns readable reasons, most likely first; none when the port answers."""
+    why = []
+    tcp = tcp_probe(ip, port)
+    if tcp == "open":
+        return why
+    route, mine = _route_to(ip)
+    pong, _out = _ping(ip)
+    vpn = VPN_RE.search(route)
+    if vpn:
+        why.append(f"Windows sends to the TV through <b>{html.escape(route)}</b>, not your home network. Turn it off "
+                   "for a minute (in Tailscale: <b>Exit node → None</b> and untick <b>Use Tailscale subnets</b>), "
+                   "then try again.")
+    if mine and ip.rsplit(".", 1)[0] != mine.rsplit(".", 1)[0]:
+        why.append(f"this PC is <b>{html.escape(mine)}</b> and the TV <b>{html.escape(ip)}</b>: different networks. "
+                   "Put both on the same Wi-Fi or router (not a guest Wi-Fi).")
+    if tcp == "refused":
+        why.append("the TV answered, but nothing listens on that port: its pairing screen closed or moved to another "
+                   "port. Open <b>Pair device with pairing code</b> again and keep it on screen.")
+    elif pong is False:
+        why.append("the TV does not even answer a ping from this PC. Most often the router keeps Wi-Fi devices apart "
+                   "(<b>AP / client isolation</b>, or a <b>guest</b> Wi-Fi): put the PC and the TV on the same main "
+                   "Wi-Fi, or the PC on a cable, or turn isolation off in the router.")
+    else:
+        why.append("the TV answers a ping, but the pairing port gets no answer: security software on this PC (an "
+                   "antivirus with its own firewall) may be dropping it. Pause its network protection for a minute, "
+                   "or press <b>Fix Windows Firewall for adb</b>.")
+    if route and not vpn:
+        why.append(f"(this PC reaches the TV through <b>{html.escape(route)}</b>"
+                   f"{', as ' + html.escape(mine) if mine else ''})")
+    return why
+
+
+def pair_debug_report(adb, addr, last_pair=""):
+    """Plain text with everything that matters for a failed pairing, to copy and send to whoever helps."""
+    ip, _, port = addr.partition(":")
+    lines = [f"CleanYourTV {APP_VERSION} pairing debug", f"python {sys.version.split()[0]} on {sys.platform}",
+             f"address typed/found: {addr}", ""]
+
+    def sec(title, text):
+        if callable(text):
+            try:
+                text = text()
+            except Exception as e:   # noqa: BLE001 - one missing part must not stop the report
+                text = f"{type(e).__name__}: {e}"
+        lines.extend([f"===== {title}", str(text or "(nothing)").strip(), ""])
+
+    sec("adb path", lambda: f"{adb}\nall adb.exe: {adb_paths(adb)}")
+    if adb:
+        sec("adb version", lambda: _adb_run(adb, ["version"], 15)[1])
+        sec("adb mdns check", lambda: _adb_run(adb, ["mdns", "check"], 15)[1])
+        sec("adb mdns services", lambda: _adb_run(adb, ["mdns", "services"], 15)[1])
+        sec("adb devices -l", lambda: _adb_run(adb, ["devices", "-l"], 15)[1])
+    sec("last adb pair output", last_pair)
+    if ip:
+        if port.isdigit():
+            sec(f"tcp {ip}:{port}", lambda: tcp_probe(ip, port))
+        for p_ in (5555,):
+            sec(f"tcp {ip}:{p_}", lambda p_=p_: tcp_probe(ip, p_))
+        sec(f"ping {ip}", lambda: _ping(ip)[1])
+        sec("route to TV", lambda: "adapter: {}\nthis PC: {}".format(*_route_to(ip)))
+    if os.name == "nt" and not DEMO:
+        sec("network profiles", lambda: _ps("Get-NetConnectionProfile | Format-Table -AutoSize Name,InterfaceAlias,"
+                                    "NetworkCategory,IPv4Connectivity | Out-String -Width 200"))
+        sec("adapters", lambda: _ps("Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress -ne '127.0.0.1'} | "
+                            "Format-Table -AutoSize InterfaceAlias,IPAddress,PrefixLength | Out-String -Width 200"))
+        sec("firewall profiles", lambda: _ps("Get-NetFirewallProfile | Format-Table -AutoSize Name,Enabled,"
+                                     "DefaultInboundAction,DefaultOutboundAction | Out-String -Width 200"))
+        sec("firewall rules for adb.exe", lambda: _ps(
+            "Get-NetFirewallApplicationFilter | Where-Object {$_.Program -like '*adb.exe'} | ForEach-Object {"
+            " $r = $_ | Get-NetFirewallRule; '{0} | {1} | {2} | {3} | {4}' -f $r.DisplayName,$r.Direction,$r.Action,"
+            "$r.Enabled,$_.Program }", 90))
+        sec("antivirus", lambda: _ps("(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct)"
+                             ".displayName -join ', '"))
+        sec("firewall products", lambda: _ps("(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName FirewallProduct)"
+                                     ".displayName -join ', '"))
+        if ip and port.isdigit():
+            sec("Test-NetConnection", lambda: _ps(f"Test-NetConnection {_ps_quote(ip)} -Port {int(port)} -WarningAction "
+                                          "SilentlyContinue | Format-List ComputerName,RemotePort,InterfaceAlias,"
+                                          "SourceAddress,PingSucceeded,TcpTestSucceeded | Out-String", 60))
+    text = "\n".join(lines)
+    try:
+        APPDATA.mkdir(parents=True, exist_ok=True)
+        (APPDATA / "pair-debug.txt").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    return text
+
+
 def fix_firewall(ip, adbs):
     """One administrator prompt: removes Windows Firewall rules that block adb.exe, allows every adb.exe this app uses
     (in and out, every network type) and the TVs' mDNS announcements, and marks the TV's network Private if Windows
@@ -2678,7 +2823,12 @@ class PairDialog(Dialog):
                          "TV's network Private if Windows has it as Public.")
         self.fw.clicked.connect(self.fix_fw)
         self.fw.setVisible(os.name == "nt" or DEMO)
-        self.lay.addWidget(hbox(self.fw, stretch_at=1))
+        self.dbg = button("Copy debug report", None, "log",
+                          "Collects adb, network and firewall details into the clipboard (and pair-debug.txt), to "
+                          "paste to whoever helps you.")
+        self.dbg.clicked.connect(self.debug)
+        self.last_pair = ""
+        self.lay.addWidget(hbox(self.fw, self.dbg))
         self.go = self.buttons("Pair & connect", "Cancel")
         self.go.setEnabled(False)
         self.go.clicked.disconnect()
@@ -2747,16 +2897,21 @@ class PairDialog(Dialog):
                     if now:
                         target = now[-1]
                 tip, tport = target.rsplit(":", 1)
-                if not _port_open(tip, int(tport), 3):
-                    raise RuntimeError(
-                        f"nothing answers at <b>{target}</b>: the TV's pairing screen is closed, or it now has another "
-                        "port. On the TV open <b>Pair device with pairing code</b> again and leave it open; this "
-                        "window picks the new port up by itself.")
+                why = reach_check(tip, tport)
+                if why:
+                    chk = network_check(tip)
+                    if chk["av"]:
+                        why.append("security software found: <b>" + html.escape(", ".join(chk["av"])) + "</b>")
+                    if chk["blocks"]:
+                        why.append(f"Windows Firewall has {chk['blocks']} rule(s) that block adb.exe")
+                    raise RuntimeError(f"this PC cannot reach <b>{target}</b>.<br>• " + "<br>• ".join(why) +
+                                       "<br><br>Press <b>Copy debug report</b> and paste it to whoever helps you.")
                 _rc, ver = _adb_run(self.adb, ["version"], 15)
                 log(f"$ adb version\n{ver}", "cmd")
                 # One try per code: after a failed try the TV may no longer accept that code.
                 _rc, out = _adb_run(self.adb, ["pair", target, code], 40)
-                log(f"$ adb pair {target} ******\n{out}", "cmd")
+                self.last_pair = f"$ adb pair {target} ******\n{out}"
+                log(self.last_pair, "cmd")
                 if "success" not in out.lower():
                     low = out.lower()
                     if "protocol fault" in low or "wrong password" in low or "reset" in low or "failed" in low:
@@ -2805,6 +2960,24 @@ class PairDialog(Dialog):
             self.timer.start(2500)
 
         run_job(work, pool=NET_POOL, on_result=done, on_error=failed)
+
+    def debug(self):
+        self.dbg.setEnabled(False)
+        self.dbg.setText("Collecting… (about 20 s)")
+
+        def ok(text):
+            QApplication.clipboard().setText(text)
+            self.dbg.setEnabled(True)
+            self.dbg.setText("Copied ✓  paste it (Ctrl+V)")
+            log("Pairing debug report copied to the clipboard (also in pair-debug.txt).", "ok")
+
+        def bad(m):
+            self.dbg.setEnabled(True)
+            self.dbg.setText("Copy debug report")
+            self.msg.set(f"Could not collect the report: {m}", "bad")
+
+        run_job(pair_debug_report, self.adb, self.addr.text().strip(), self.last_pair, pool=NET_POOL,
+                on_result=ok, on_error=bad)
 
     def fix_fw(self):
         ip = self.addr.text().strip().split(":")[0] or self.ip_hint or "192.168.1.1"
