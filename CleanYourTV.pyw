@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.8.pyw            normal mode
-    python CleanYourTV_v1.5.8.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.9.pyw            normal mode
+    python CleanYourTV_v1.5.9.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,10 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.9  Pair a TV: fixes "protocol fault (couldn't read status message)". An adb older than platform-tools 34 is
+         replaced by the newest, another program's adb server is stopped first, the pairing port is the one the TV
+         announces at that moment (reopening the TV's pairing screen gives a new port and code), and a protocol fault
+         is retried once with a fresh adb. The message says what to do next if it still fails.
   1.5.8  Wireless debugging made easy, for Android 11+ boxes with no Network debugging: Pair a TV… finds the TV's
          pairing screen by itself, you type the 6-digit code, and the box's port 5555 is opened so it connects like
          any other; adb comes from the Android SDK on this PC or is downloaded once. Find TVs lists these boxes too
@@ -139,7 +143,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.8"
+APP_VERSION = "1.5.9"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2580,9 +2584,20 @@ class PairDialog(Dialog):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.look)
         self.busy = False
-        run_job(ensure_adb, pool=NET_POOL, on_result=self._adb_ready,
+        self.typed = False
+        self.addr.textEdited.connect(lambda _t: setattr(self, "typed", True))
+        run_job(self._prepare, pool=NET_POOL, on_result=self._adb_ready,
                 on_error=lambda m: self.msg.set(f"Could not get adb: {m}. Type the address and code anyway once adb "
                                                 "is installed.", "bad"))
+
+    @staticmethod
+    def _prepare():
+        adb = ensure_adb()
+        if not DEMO:
+            # A fresh adb server: its mDNS list then shows the TV's pairing screen as it is now, not an older one.
+            _adb_run(adb, ["kill-server"], 15)
+            _adb_run(adb, ["start-server"], 30)
+        return adb
 
     def _ready(self, *_):
         self.go.setEnabled(bool(re.fullmatch(r"\d{6}", self.code.text().strip())) and
@@ -2604,8 +2619,9 @@ class PairDialog(Dialog):
             hits = md["pairing"]
             if self.ip_hint:
                 hits = [h for h in hits if h[0] == self.ip_hint] or hits
-            if hits and not self.addr.text().strip():
-                ip, port, _n = hits[0]
+            # The newest announcement wins: reopening the TV's pairing screen gives a new port and a new code.
+            if hits and not self.typed and self.addr.text().strip() != f"{hits[-1][0]}:{hits[-1][1]}":
+                ip, port, _n = hits[-1]
                 self.addr.setText(f"{ip}:{port}")
                 self.msg.set(f"Found the TV's pairing screen at <b>{ip}</b>. Type the 6-digit code it shows.", "ok")
                 self.code.setFocus()
@@ -2621,9 +2637,32 @@ class PairDialog(Dialog):
 
         def work():
             if not DEMO:
-                rc, out = _adb_run(self.adb, ["pair", addr, code], 40)
-                log(f"$ adb pair {addr} ******\n{out}", "cmd")
+                target = addr
+                if not self.typed:   # the pairing screen's port as announced right now
+                    now = [f"{i}:{p}" for i, p, _n in adb_mdns(self.adb)["pairing"] if i == ip]
+                    if now:
+                        target = now[-1]
+                out = ""
+                for attempt in range(2):
+                    rc, out = _adb_run(self.adb, ["pair", target, code], 40)
+                    log(f"$ adb pair {target} ******\n{out}", "cmd")
+                    if "success" in out.lower():
+                        break
+                    if "protocol fault" in out.lower() and attempt == 0:
+                        # Usually an old adb, or another program's adb server: the newest adb, a fresh server, once more.
+                        self.adb = ensure_adb(fresh=True)
+                        _adb_run(self.adb, ["kill-server"], 15)
+                        _adb_run(self.adb, ["start-server"], 30)
+                        continue
+                    break
                 if "success" not in out.lower():
+                    low = out.lower()
+                    if "protocol fault" in low or "wrong password" in low or "failed" in low:
+                        raise RuntimeError(
+                            (out or "pairing failed") + "<br><br>On the TV, go back one screen and open <b>Pair device "
+                            "with pairing code</b> again: it shows a <b>new code and port</b>, and this window picks the "
+                            "new port up by itself. Type the new code. If it fails again, allow <b>adb.exe</b> in Windows "
+                            "Firewall (Private networks) and check this PC is on the same network as the TV, with no VPN.")
                     raise RuntimeError(out or "pairing failed")
             # The connect port is announced once paired; the pairing screen's port is a different one.
             for _ in range(12):
@@ -2640,8 +2679,14 @@ class PairDialog(Dialog):
             self.result_ip = ip_ok
             self.accept()
 
-        run_job(work, pool=NET_POOL, on_result=done,
-                on_error=lambda m: (self.msg.set(f"Pairing failed: {m}", "bad"), self._ready(), self.timer.start(2500)))
+        def failed(m):
+            self.msg.set(f"Pairing failed: {m}", "bad")
+            self.code.clear()
+            self.typed = False
+            self._ready()
+            self.timer.start(2500)
+
+        run_job(work, pool=NET_POOL, on_result=done, on_error=failed)
 
     def done(self, r):
         self.timer.stop()
@@ -3523,11 +3568,23 @@ def find_adb():
     return shutil.which("adb") or ""
 
 
-def ensure_adb(say=lambda t: None):
-    """adb, downloading Google's platform-tools into the app's folder the first time (no admin rights needed)."""
+def adb_version(adb):
+    """platform-tools major version (e.g. 36), 0 when unknown."""
+    _rc, out = _adb_run(adb, ["version"], 15)
+    m = re.search(r"Version (\d+)\.", out)
+    return int(m.group(1)) if m else 0
+
+
+def ensure_adb(say=lambda t: None, fresh=False):
+    """adb, downloading Google's platform-tools into the app's folder the first time (no admin rights needed). An old
+    adb (before platform-tools 34) pairs badly with Android 13/14 ("protocol fault"), so it is replaced by the newest."""
     adb = find_adb()
-    if adb or DEMO:
+    if DEMO:
         return adb or "adb"
+    if adb and not fresh and adb_version(adb) >= 34:
+        return adb
+    if adb and Path(adb).resolve() != (ADB_HOME / Path(adb).name).resolve():
+        _adb_run(adb, ["kill-server"], 15)   # another adb's server would answer for ours
     plat = "windows" if os.name == "nt" else ("darwin" if sys.platform == "darwin" else "linux")
     tmp = APPDATA / "platform-tools.zip"
     say("Downloading adb (Android platform-tools, about 7 MB)…")
@@ -3535,7 +3592,8 @@ def ensure_adb(say=lambda t: None):
     shutil.rmtree(ADB_HOME, ignore_errors=True)
     _safe_extract(tmp, APPDATA)
     tmp.unlink(missing_ok=True)
-    adb = find_adb()
+    exe = "adb.exe" if os.name == "nt" else "adb"
+    adb = str(ADB_HOME / exe) if (ADB_HOME / exe).is_file() else find_adb()
     if not adb:
         raise RuntimeError("adb was downloaded but could not be found")
     if os.name != "nt":

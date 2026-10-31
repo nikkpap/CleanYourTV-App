@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.9
+
+Pair a TV: fixes "protocol fault (couldn't read status message)". An adb older than platform-tools 34 is replaced by the newest, another program's adb server is stopped first, the pairing port is the one the TV announces at that moment (reopening the TV's pairing screen gives a new port and code), and a protocol fault is retried once with a fresh adb. If it still fails, the message says what to do next.
+
 ## 1.5.8
 
 Wireless debugging made easy, for Android 11+ boxes with no Network debugging: Pair a TV… finds the TV's pairing screen by itself, you type the 6-digit code, and the box's port 5555 is opened so it connects like any other; adb comes from the Android SDK on this PC or is downloaded once. Find TVs lists these boxes too (paired ones join at once, unpaired ones offer pairing), and a refused Connect offers to pair.
