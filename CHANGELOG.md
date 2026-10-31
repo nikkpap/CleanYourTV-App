@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.4
+
+Pair a TV debug report works before adb is ready and with an empty Address: it finds adb and the TV by itself (or uses the last address tried), and always lists the devices this PC sees.
+
 ## 1.6.3
 
 Pair a TV debug report: adds this PC's Wi-Fi (network name, band, channel, signal) and the devices it sees on the network (arp), to tell Wi-Fi isolation apart from a TV that changed address.

@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.6.3.pyw            normal mode
-    python CleanYourTV_v1.6.3.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.4.pyw            normal mode
+    python CleanYourTV_v1.6.4.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.4  Pair a TV debug report works before adb is ready and with an empty Address: it finds adb and the TV by
+         itself (or uses the last address tried), and always lists the devices this PC sees.
   1.6.3  Pair a TV debug report: adds the PC's Wi-Fi (network name, band, channel, signal) and the devices this PC
          sees on the network (arp), to tell Wi-Fi isolation apart from a TV that changed address.
   1.6.2  Pair a TV: tells apart a TV that is invisible on this PC's network (Destination host unreachable: Wi-Fi
@@ -156,7 +158,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2710,11 +2712,30 @@ def reach_check(ip, port):
     return why
 
 
+KNOWN_PAIR_IP = {}   # the last TV address the pairing window tried, for the debug report
+
+
 def pair_debug_report(adb, addr, last_pair=""):
     """Plain text with everything that matters for a failed pairing, to copy and send to whoever helps."""
+    if not adb and not DEMO:
+        try:
+            adb = find_adb() or ensure_adb()
+        except Exception:   # noqa: BLE001 - the report says adb is missing
+            adb = ""
+    found_by = "typed/found"
+    if not addr and adb:
+        try:
+            md = adb_mdns(adb)
+            hit = (md["pairing"] or md["connect"])
+            if hit:
+                addr, found_by = f"{hit[-1][0]}:{hit[-1][1]}", "found now by mDNS"
+        except Exception:   # noqa: BLE001
+            pass
+    if not addr:
+        addr, found_by = KNOWN_PAIR_IP.get("last", ""), "last TV this window tried"
     ip, _, port = addr.partition(":")
     lines = [f"CleanYourTV {APP_VERSION} pairing debug", f"python {sys.version.split()[0]} on {sys.platform}",
-             f"address typed/found: {addr}", ""]
+             f"address {found_by}: {addr or '(none: type the TV IP in Address and press this again)'}", ""]
 
     def sec(title, text):
         if callable(text):
@@ -2754,7 +2775,7 @@ def pair_debug_report(adb, addr, last_pair=""):
         if ip:
             sec("arp (who answers for the TV's address)",
                 lambda: _ps(f"arp -a | Select-String -SimpleMatch {_ps_quote(ip)} | Out-String") or "no entry")
-            sec("all devices this PC sees (arp)", lambda: _ps("arp -a | Select-String -Pattern 'dynamic' | Out-String"))
+        sec("all devices this PC sees (arp)", lambda: _ps("arp -a | Select-String -Pattern 'dynamic' | Out-String"))
         sec("antivirus", lambda: _ps("(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct)"
                              ".displayName -join ', '"))
         sec("firewall products", lambda: _ps("(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName FirewallProduct)"
@@ -2905,6 +2926,7 @@ class PairDialog(Dialog):
     def pair(self):
         addr, code = self.addr.text().strip(), self.code.text().strip()
         ip = addr.split(":")[0]
+        KNOWN_PAIR_IP["last"] = addr
         self.timer.stop()
         self.go.setEnabled(False)
         self.msg.set("Pairing… then opening the TV's port 5555.", "info")
