@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.8
+
+Wireless debugging made easy, for Android 11+ boxes with no Network debugging: Pair a TV… finds the TV's pairing screen by itself, you type the 6-digit code, and the box's port 5555 is opened so it connects like any other; adb comes from the Android SDK on this PC or is downloaded once. Find TVs lists these boxes too (paired ones join at once, unpaired ones offer pairing), and a refused Connect offers to pair.
+
 ## 1.5.7
 
 Connect: when Find TVs (or the search at start) finds several TVs or boxes with debugging on, a list asks which one, each named by the hardware it had the last time this PC connected (and its network name), the last one used first. Picking another TV while one is connected switches to it.

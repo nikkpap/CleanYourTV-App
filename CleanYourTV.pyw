@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.7.pyw            normal mode
-    python CleanYourTV_v1.5.7.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.8.pyw            normal mode
+    python CleanYourTV_v1.5.8.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,10 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.8  Wireless debugging made easy, for Android 11+ boxes with no Network debugging: Pair a TV… finds the TV's
+         pairing screen by itself, you type the 6-digit code, and the box's port 5555 is opened so it connects like
+         any other; adb comes from the Android SDK on this PC or is downloaded once. Find TVs lists these boxes too
+         (paired ones join at once, unpaired ones offer pairing), and a refused Connect offers to pair.
   1.5.7  Connect: when Find TVs (or the search at start) finds several TVs or boxes with debugging on, a list asks which
          one, each named by the hardware it had the last time this PC connected (and its network name), the last one
          used first. Picking another TV while one is connected switches to it.
@@ -135,7 +139,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.7"
+APP_VERSION = "1.5.8"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2545,6 +2549,105 @@ TS_STEPS = (
 )
 
 
+class PairDialog(Dialog):
+    """Pairs a TV that offers only Wireless debugging: it finds the TV's pairing screen by itself, the person types the
+    6-digit code, and the TV's port 5555 is opened so the app connects as to any other TV."""
+
+    def __init__(self, parent, ip_hint=""):
+        super().__init__(parent, "Pair a TV (Wireless debugging)", 620)
+        self.ip_hint = ip_hint
+        self.adb = ""
+        self.result_ip = ""
+        self.lay.addWidget(label(
+            "<b>On the TV:</b> Settings → System → Developer options → <b>Wireless debugging</b> → "
+            "<b>Pair device with pairing code</b>. Leave that screen open: the TV shows a 6-digit code.", "Muted",
+            wrap=True, rich=True))
+        self.msg = Banner("Getting adb ready…", "info")
+        self.lay.addWidget(self.msg)
+        self.addr = QLineEdit()
+        self.addr.setPlaceholderText("found by itself, or type IP:port from the TV's pairing screen")
+        self.code = QLineEdit()
+        self.code.setPlaceholderText("6-digit code")
+        self.code.setMaxLength(6)
+        self.code.setFixedWidth(150)
+        self.lay.addWidget(hbox(label("Address", "Muted"), self.addr, label("Code", "Muted"), self.code))
+        self.go = self.buttons("Pair & connect", "Cancel")
+        self.go.setEnabled(False)
+        self.go.clicked.disconnect()
+        self.go.clicked.connect(self.pair)
+        self.code.textChanged.connect(self._ready)
+        self.addr.textChanged.connect(self._ready)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.look)
+        self.busy = False
+        run_job(ensure_adb, pool=NET_POOL, on_result=self._adb_ready,
+                on_error=lambda m: self.msg.set(f"Could not get adb: {m}. Type the address and code anyway once adb "
+                                                "is installed.", "bad"))
+
+    def _ready(self, *_):
+        self.go.setEnabled(bool(re.fullmatch(r"\d{6}", self.code.text().strip())) and
+                           bool(re.fullmatch(r"[\w.\-]+:\d+", self.addr.text().strip())))
+
+    def _adb_ready(self, adb):
+        self.adb = adb
+        self.msg.set("Looking for the TV's pairing screen…", "info")
+        self.look()
+        self.timer.start(2500)
+
+    def look(self):
+        if self.busy or not self.adb:
+            return
+        self.busy = True
+
+        def show(md):
+            self.busy = False
+            hits = md["pairing"]
+            if self.ip_hint:
+                hits = [h for h in hits if h[0] == self.ip_hint] or hits
+            if hits and not self.addr.text().strip():
+                ip, port, _n = hits[0]
+                self.addr.setText(f"{ip}:{port}")
+                self.msg.set(f"Found the TV's pairing screen at <b>{ip}</b>. Type the 6-digit code it shows.", "ok")
+                self.code.setFocus()
+
+        run_job(adb_mdns, self.adb, pool=NET_POOL, on_result=show, on_error=lambda m: setattr(self, "busy", False))
+
+    def pair(self):
+        addr, code = self.addr.text().strip(), self.code.text().strip()
+        ip = addr.split(":")[0]
+        self.timer.stop()
+        self.go.setEnabled(False)
+        self.msg.set("Pairing… then opening the TV's port 5555.", "info")
+
+        def work():
+            if not DEMO:
+                rc, out = _adb_run(self.adb, ["pair", addr, code], 40)
+                log(f"$ adb pair {addr} ******\n{out}", "cmd")
+                if "success" not in out.lower():
+                    raise RuntimeError(out or "pairing failed")
+            # The connect port is announced once paired; the pairing screen's port is a different one.
+            for _ in range(12):
+                md = adb_mdns(self.adb)
+                ports = [p for i, p, _n in md["connect"] if i == ip]
+                if ports:
+                    adb_open_5555(self.adb, ip, ports[0])
+                    return ip
+                time.sleep(1.5)
+            raise RuntimeError("paired, but the TV's connect port was not found. On the TV, close the pairing screen "
+                               "and press Find TVs.")
+
+        def done(ip_ok):
+            self.result_ip = ip_ok
+            self.accept()
+
+        run_job(work, pool=NET_POOL, on_result=done,
+                on_error=lambda m: (self.msg.set(f"Pairing failed: {m}", "bad"), self._ready(), self.timer.start(2500)))
+
+    def done(self, r):
+        self.timer.stop()
+        super().done(r)
+
+
 class ConnectPage(Page):
     title = "Connect"
     subtitle = "Find your TV on the network and open an ADB connection"
@@ -2662,10 +2765,13 @@ class ConnectPage(Page):
         c, lay = card()
         lay.addWidget(label("Wireless debugging (Google TV, Android 11+)", "H2"))
         lay.addWidget(label(
-            "If Connect is refused, your TV may only offer Wireless debugging. On the TV: Developer options → "
-            "Wireless debugging → Pair device with pairing code. Enter what it shows. This uses the "
-            "<b>adb</b> program from Android platform-tools, which must be installed.", "Muted", wrap=True,
-            rich=True))
+            "Newer boxes (Android 11 and later) often have no Network debugging, only <b>Wireless debugging</b>, and "
+            "then Connect is refused. Press <b>Pair a TV…</b>: it finds the TV's pairing screen by itself, you type "
+            "the 6-digit code, and the TV joins like any other. adb is downloaded once if this PC has none.", "Muted",
+            wrap=True, rich=True))
+        self.wpair_btn = button("Pair a TV…", "Primary", "plug", "Wireless debugging: pair with the code the TV shows")
+        lay.addWidget(hbox(self.wpair_btn, None))
+        lay.addWidget(label("Typing the address and ports by hand (only if the automatic way finds nothing):", "Dim"))
         self.pair_addr = QLineEdit()
         self.pair_addr.setPlaceholderText("IP:pair-port  e.g. 192.168.1.50:37123")
         self.pair_code = QLineEdit()
@@ -2685,6 +2791,7 @@ class ConnectPage(Page):
         self.connect_btn.clicked.connect(self.do_connect)
         self.disconnect_btn.clicked.connect(self.do_disconnect)
         self.pair_btn.clicked.connect(self.pair)
+        self.wpair_btn.clicked.connect(lambda: self.pair_wireless())
         self.host.lineEdit().returnPressed.connect(self.do_connect)
         if DEMO:
             self.host.setCurrentText("192.168.1.77")
@@ -2920,11 +3027,27 @@ class ConnectPage(Page):
             self.auto = False
             QTimer.singleShot(0, lambda: self.pick_tv(hits))
             return
+        if hits[0][1] == WIRELESS_UNPAIRED:
+            self.auto = False
+            self.status.set(f"<b>{hits[0][0]}</b> has Wireless debugging on but is not paired with this PC yet.", "info")
+            QTimer.singleShot(0, lambda: self.pair_wireless(hits[0][0]))
+            return
         if len(hits) == 1:
             self.host.setCurrentText(hits[0][0])
             if self.auto and not TV.connected:
                 self.do_connect()
         self.auto = False
+
+    def pair_wireless(self, ip=""):
+        d = PairDialog(self, ip)
+        if d.exec() == QDialog.DialogCode.Accepted and d.result_ip:
+            self.host.setCurrentText(d.result_ip)
+            self.port.setValue(5555)
+            self.status.set(f"Paired with <b>{d.result_ip}</b> and its port 5555 is open. Connecting…", "ok")
+            if TV.connected and TV.host != d.result_ip:
+                run_job(TV.close, on_done=lambda: (BUS.connection.emit(False, {}), self.do_connect()))
+            else:
+                self.do_connect()
 
     def pick_tv(self, hits):
         """Several TVs or boxes answer with debugging on: the person picks one, by the name it had last time."""
@@ -2957,6 +3080,9 @@ class ConnectPage(Page):
             self.status.set("Several TVs found: pick one in the address box and press Connect.", "info")
             return
         ip = lst.currentItem().data(Qt.ItemDataRole.UserRole)
+        if dict(hits).get(ip) == WIRELESS_UNPAIRED:
+            self.pair_wireless(ip)
+            return
         self.host.setCurrentText(ip)
         if TV.connected and TV.host != ip:
             run_job(TV.close, on_done=lambda: (BUS.connection.emit(False, {}), self.do_connect()))
@@ -2993,8 +3119,13 @@ class ConnectPage(Page):
         hint = ""
         low = msg.lower()
         if "refused" in low:
-            hint = ("The TV refused the connection: network ADB is off. Switch on USB debugging (and "
-                    "Network debugging), or use Wireless debugging below.")
+            hint = ("The TV refused the connection: its network ADB port is closed. On Android 11 and later boxes "
+                    "that is usual: press <b>Pair a TV…</b> below (Wireless debugging), or switch on Network "
+                    "debugging if the TV has it.")
+            QTimer.singleShot(300, lambda: ask(self, "Pair with Wireless debugging?",
+                                               "The TV refused the connection. Newer boxes only open their port after "
+                                               "pairing with the code from <b>Wireless debugging</b>. Pair now?",
+                                               "Pair a TV…") and self.pair_wireless(self.host.currentText().strip()))
         elif "no route" in low and sys.platform == "darwin":
             hint = "macOS Local Network privacy may be blocking this app; allow it in System Settings → Privacy."
         elif "timed out" in low or "timeout" in low:
@@ -3050,10 +3181,9 @@ class ConnectPage(Page):
 
     # --- pair -------------------------------------------------------------------------------
     def pair(self):
-        adb = shutil.which("adb")
+        adb = find_adb()
         if not adb:
-            inform(self, "adb not found", "Install Android SDK Platform-Tools and make sure <b>adb</b> is on your "
-                   "PATH, then try again.", "warn")
+            inform(self, "adb not ready", "Press <b>Pair a TV…</b> once: it downloads adb, then this works too.", "warn")
             return
         addr, code, cport = self.pair_addr.text().strip(), self.pair_code.text().strip(), self.conn_port.text().strip()
         if not re.fullmatch(r"[\w.\-]+:\d+", addr) or not re.fullmatch(r"\d{6}", code):
@@ -3338,7 +3468,123 @@ def scan_network(port):
 
     with ThreadPoolExecutor(8) as ex:
         names = list(ex.map(name, hits))
-    return sorted(zip(hits, names), key=lambda t: tuple(int(x) for x in t[0].split(".")))
+    found = list(zip(hits, names))
+    # Wireless debugging (Android 11+): a box paired with this PC gets port 5555 opened and joins the list; one that
+    # is not paired yet is listed too, so it can be paired from the picker.
+    adb = find_adb()
+    if adb:
+        try:
+            md = adb_mdns(adb)
+            for ip, cport, _n in md["connect"]:
+                if ip in hits:
+                    continue
+                try:
+                    adb_open_5555(adb, ip, cport)
+                    found.append((ip, "Wireless debugging"))
+                except Exception:
+                    found.append((ip, WIRELESS_UNPAIRED))
+            for ip, _p, _n in md["pairing"]:
+                if ip not in [f[0] for f in found]:
+                    found.append((ip, WIRELESS_UNPAIRED))
+        except Exception as e:
+            log(f"wireless debugging search: {e}", "warn")
+    seen, out = set(), []
+    for ip, n in found:
+        if ip not in seen:
+            seen.add(ip)
+            out.append((ip, n))
+    return sorted(out, key=lambda t: tuple(int(x) for x in t[0].split(".")))
+
+
+WIRELESS_UNPAIRED = "Wireless debugging: needs pairing"
+
+
+# ----------------------------------------------------------------------------------------------
+# Wireless debugging (Android 11+): boxes that offer no "Network debugging" open no port 5555 until a paired adb
+# asks for it. adb comes from the Android SDK on this PC, or is downloaded once (platform-tools, ~7 MB).
+# ----------------------------------------------------------------------------------------------
+ADB_HOME = APPDATA / "platform-tools"
+PLATFORM_TOOLS_URL = "https://dl.google.com/android/repository/platform-tools-latest-{}.zip"
+MDNS_RE = re.compile(r"^(\S+)\s+_adb-tls-(pairing|connect)\._tcp\.?\s+(\d{1,3}(?:\.\d{1,3}){3}):(\d+)", re.M)
+
+
+def find_adb():
+    exe = "adb.exe" if os.name == "nt" else "adb"
+    cands = [ADB_HOME / exe]
+    try:
+        sdk = find_sdk()
+        if sdk:
+            cands.append(sdk / "platform-tools" / exe)
+    except Exception:
+        pass
+    for c in cands:
+        if c.is_file():
+            return str(c)
+    return shutil.which("adb") or ""
+
+
+def ensure_adb(say=lambda t: None):
+    """adb, downloading Google's platform-tools into the app's folder the first time (no admin rights needed)."""
+    adb = find_adb()
+    if adb or DEMO:
+        return adb or "adb"
+    plat = "windows" if os.name == "nt" else ("darwin" if sys.platform == "darwin" else "linux")
+    tmp = APPDATA / "platform-tools.zip"
+    say("Downloading adb (Android platform-tools, about 7 MB)…")
+    _download(PLATFORM_TOOLS_URL.format(plat), tmp, say)
+    shutil.rmtree(ADB_HOME, ignore_errors=True)
+    _safe_extract(tmp, APPDATA)
+    tmp.unlink(missing_ok=True)
+    adb = find_adb()
+    if not adb:
+        raise RuntimeError("adb was downloaded but could not be found")
+    if os.name != "nt":
+        os.chmod(adb, 0o755)
+    return adb
+
+
+def _adb_run(adb, args, timeout=30):
+    flags = 0x08000000 if os.name == "nt" else 0
+    try:
+        p = subprocess.run([adb] + args, capture_output=True, text=True, timeout=timeout, creationflags=flags,
+                           encoding="utf-8", errors="replace")
+        return p.returncode, (p.stdout + p.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return 1, "timed out"
+
+
+def adb_mdns(adb):
+    """{"pairing": [(ip, port, name)], "connect": [(ip, port, name)]}: TVs announcing Wireless debugging."""
+    out = {"pairing": [], "connect": []}
+    if DEMO:
+        return {"pairing": [("192.168.1.88", "37123", "adb-demo")], "connect": [("192.168.1.88", "41567", "adb-demo")]}
+    if not adb:
+        return out
+    _adb_run(adb, ["start-server"], 20)
+    _rc, text = _adb_run(adb, ["mdns", "services"], 15)
+    for name, kind, ip, port in MDNS_RE.findall(text):
+        out[kind].append((ip, port, name))
+    return out
+
+
+def adb_open_5555(adb, ip, cport):
+    """A paired TV's Wireless debugging port to the classic port 5555 this app talks to (until the TV reboots)."""
+    if DEMO:
+        time.sleep(0.5)
+        return True
+    target = f"{ip}:{cport}"
+    rc, out = _adb_run(adb, ["connect", target], 20)
+    log(f"$ adb connect {target}\n{out}", "cmd")
+    if "connected" not in out.lower() or "failed" in out.lower() or "unable" in out.lower():
+        raise RuntimeError(out or "adb connect failed")
+    _rc, out = _adb_run(adb, ["-s", target, "tcpip", "5555"], 20)
+    log(f"$ adb -s {target} tcpip 5555\n{out}", "cmd")
+    for _ in range(10):
+        time.sleep(1)
+        if _port_open(ip, 5555, 1.5):
+            _adb_run(adb, ["disconnect", target], 10)
+            return True
+    raise RuntimeError("the TV did not open port 5555 (" + (out or "no answer") + ")")
 
 
 def adb_pair(adb, addr, code, ip, cport):
