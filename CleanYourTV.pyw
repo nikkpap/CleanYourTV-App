@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.6.5.pyw            normal mode
-    python CleanYourTV_v1.6.5.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.6.pyw            normal mode
+    python CleanYourTV_v1.6.6.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.6  Check for updates answers in seconds: it has its own worker, so it no longer waits behind a network
+         search, a TV that does not answer, or the pairing window.
   1.6.5  Check for updates sees a version the moment it is on GitHub: it reads the file at the newest commit
          instead of GitHub's copy that is cached for up to 5 minutes.
   1.6.4  Pair a TV debug report works before adb is ready and with an empty Address: it finds adb and the TV by
@@ -160,7 +162,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.6.5"
+APP_VERSION = "1.6.6"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -1429,6 +1431,9 @@ TV_POOL = QThreadPool()
 TV_POOL.setMaxThreadCount(1)
 NET_POOL = QThreadPool()
 NET_POOL.setMaxThreadCount(4)
+# The app's own update check never waits behind a network scan, a TV that does not answer, or pairing.
+UPDATE_POOL = QThreadPool()
+UPDATE_POOL.setMaxThreadCount(2)
 
 
 def run_job(fn, *args, on_result=None, on_error=None, on_done=None, pool=None, **kwargs):
@@ -9229,7 +9234,7 @@ class AboutDialog(QDialog):
         def check_now():
             now.setEnabled(False)
             now.setText("Checking…")
-            run_job(app_update_check, pool=NET_POOL, on_result=lambda r: offer_app_update(self, r),
+            run_job(app_update_check, pool=UPDATE_POOL, on_result=lambda r: offer_app_update(self, r),
                     on_error=lambda m: inform(self, "Could not check", f"GitHub did not answer: {m}", "warn"),
                     on_done=lambda: (now.setEnabled(True), now.setText("Check for updates")))
 
@@ -9533,7 +9538,7 @@ def main():
                                               "next start of the app", "ok")))
     if not DEMO and win.settings.value("app_update_check", "true") == "true":
         QTimer.singleShot(6000, lambda: run_job(
-            app_update_check, pool=NET_POOL, on_result=lambda r: offer_app_update(win, r, quiet=True),
+            app_update_check, pool=UPDATE_POOL, on_result=lambda r: offer_app_update(win, r, quiet=True),
             on_error=lambda m: log(f"app update check: {m}", "warn")))
     if win.settings.value("auto_connect", "true") == "true" or DEMO:
         QTimer.singleShot(500, win.page_list[0].auto_connect)

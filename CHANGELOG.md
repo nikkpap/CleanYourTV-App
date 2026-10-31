@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.6
+
+Check for updates answers in seconds: it has its own worker, so it no longer waits behind a network search, a TV that does not answer, or the pairing window.
+
 ## 1.6.5
 
 Check for updates sees a new version the moment it is on GitHub: it reads the file at the newest commit instead of GitHub's copy, which is cached for up to 5 minutes.
