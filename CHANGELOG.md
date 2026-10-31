@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.5
+
+Check for updates sees a new version the moment it is on GitHub: it reads the file at the newest commit instead of GitHub's copy, which is cached for up to 5 minutes.
+
 ## 1.6.4
 
 Pair a TV debug report works before adb is ready and with an empty Address: it finds adb and the TV by itself (or uses the last address tried), and always lists the devices this PC sees.

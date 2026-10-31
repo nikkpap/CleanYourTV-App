@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.6.4.pyw            normal mode
-    python CleanYourTV_v1.6.4.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.5.pyw            normal mode
+    python CleanYourTV_v1.6.5.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.5  Check for updates sees a version the moment it is on GitHub: it reads the file at the newest commit
+         instead of GitHub's copy that is cached for up to 5 minutes.
   1.6.4  Pair a TV debug report works before adb is ready and with an empty Address: it finds adb and the TV by
          itself (or uses the last address tried), and always lists the devices this PC sees.
   1.6.3  Pair a TV debug report: adds the PC's Wi-Fi (network name, band, channel, signal) and the devices this PC
@@ -158,7 +160,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.6.4"
+APP_VERSION = "1.6.5"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -9066,9 +9068,25 @@ def _ver(v):
         return (0,)
 
 
+APP_COMMIT_API = "https://api.github.com/repos/nikkpap/CleanYourTV-App/commits/main"
+
+
+def _fresh(url):
+    """The same raw GitHub file, but at the newest commit: the plain main/ address is cached for up to 5 minutes,
+    so a version pushed a minute ago would not be seen yet."""
+    try:
+        with _http(APP_COMMIT_API, timeout=10) as r:
+            sha = json.loads(r.read().decode("utf-8")).get("sha", "")
+        if re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            return url.replace("/main/", f"/{sha}/", 1)
+    except Exception:   # noqa: BLE001 - no API (rate limit, offline): the cached address with a cache-buster
+        pass
+    return f"{url}?t={int(time.time())}"
+
+
 def app_update_check():
     """(version, text, notes) of a newer CleanYourTV on GitHub, or None when this one is the newest."""
-    with _http(APP_UPDATE_URL, timeout=20) as r:
+    with _http(_fresh(APP_UPDATE_URL), timeout=20) as r:
         text = r.read().decode("utf-8")
     m = re.search(r'^APP_VERSION = "([0-9.]+)"', text, re.M)
     if not m:
@@ -9079,7 +9097,7 @@ def app_update_check():
     compile(text, f"CleanYourTV_v{ver}.pyw", "exec")   # a download cut short never gets started
     notes = ""
     try:
-        with _http(APP_CHANGES_URL, timeout=10) as r:
+        with _http(_fresh(APP_CHANGES_URL), timeout=10) as r:
             ch = r.read().decode("utf-8")
         parts = re.split(r"^## ", ch, flags=re.M)
         news = [p for p in parts[1:] if _ver(p.split()[0]) > _ver(APP_VERSION)]
