@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.6.pyw            normal mode
-    python CleanYourTV_v1.5.6.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.5.7.pyw            normal mode
+    python CleanYourTV_v1.5.7.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,9 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.5.7  Connect: when Find TVs (or the search at start) finds several TVs or boxes with debugging on, a list asks which
+         one, each named by the hardware it had the last time this PC connected (and its network name), the last one
+         used first. Picking another TV while one is connected switches to it.
   1.5.6  The launcher speaks the TV's language everywhere: all of its own text in Greek (it ships no Greek of its own;
          "Remove from Home" was English), and CleanYourTV's additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi
          menus) in all 30 languages the launcher has. Android picks them by the system language.
@@ -132,7 +135,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.6"
+APP_VERSION = "1.5.7"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2563,7 +2566,8 @@ class ConnectPage(Page):
         self.port.setRange(1, 65535)
         self.port.setValue(int(s.value("port", 5555)))
         self.port.setFixedWidth(90)
-        self.find_btn = button("Find TVs", None, "search", "Look for devices with port 5555 open on your network")
+        self.find_btn = button("Find TVs", None, "search", "Look for TVs and boxes with debugging on; with more than one, "
+                                                           "you pick which")
         self.connect_btn = button("Connect", "Primary", "plug")
         self.disconnect_btn = button("Disconnect", "Ghost")
         self.disconnect_btn.hide()
@@ -2912,11 +2916,52 @@ class ConnectPage(Page):
         self.host.setCurrentText(hits[0][0] if not current else current)
         names = ", ".join(f"<b>{ip}</b>" + (f" ({n})" if n else "") for ip, n in hits)
         self.status.set(f"Found: {names}. Pick one and press Connect.", "ok")
+        if len(hits) > 1:
+            self.auto = False
+            QTimer.singleShot(0, lambda: self.pick_tv(hits))
+            return
         if len(hits) == 1:
             self.host.setCurrentText(hits[0][0])
             if self.auto and not TV.connected:
                 self.do_connect()
         self.auto = False
+
+    def pick_tv(self, hits):
+        """Several TVs or boxes answer with debugging on: the person picks one, by the name it had last time."""
+        s = self.win.settings
+        last = s.value("host", "") or ""
+        d = Dialog(self, "Which TV?", 600)
+        d.lay.addWidget(label(f"{len(hits)} TVs or boxes on your network have debugging on. Pick the one to work on; "
+                              "the others are not touched.", "Muted", wrap=True))
+        lst = QListWidget()
+        lst.setMinimumHeight(min(60 + 46 * len(hits), 360))
+        lst.setStyleSheet("QListWidget::item { padding: 10px 6px; }")
+        for ip, host_name in sorted(hits, key=lambda h: (h[0] != last, tuple(int(x) for x in h[0].split(".")))):
+            known = s.value(f"known_tv/{ip.replace('.', '_')}", "") or ""
+            parts = [known or "Not connected from this PC yet"]
+            if host_name and host_name not in known:
+                parts.append(host_name)
+            if ip == last:
+                parts.append("last used")
+            it = QListWidgetItem(f"{ip}    ·    " + "    ·    ".join(parts))
+            it.setData(Qt.ItemDataRole.UserRole, ip)
+            it.setForeground(QColor(C["text"] if known else C["muted"]))
+            lst.addItem(it)
+        lst.setCurrentRow(0)
+        d.lay.addWidget(lst)
+        d.lay.addWidget(label("Not sure which is which? The TV you pick shows “Allow USB debugging?” the first time; "
+                              "the address is also under Settings → Network on each TV.", "Dim", wrap=True))
+        lst.itemDoubleClicked.connect(lambda _i: d.accept())
+        d.buttons("Connect", "Cancel")
+        if d.exec() != QDialog.DialogCode.Accepted or not lst.currentItem():
+            self.status.set("Several TVs found: pick one in the address box and press Connect.", "info")
+            return
+        ip = lst.currentItem().data(Qt.ItemDataRole.UserRole)
+        self.host.setCurrentText(ip)
+        if TV.connected and TV.host != ip:
+            run_job(TV.close, on_done=lambda: (BUS.connection.emit(False, {}), self.do_connect()))
+        else:
+            self.do_connect()
 
     # --- connect ----------------------------------------------------------------------------
     def do_connect(self):
@@ -2939,6 +2984,8 @@ class ConnectPage(Page):
         s.setValue("port", TV.port)
         recent = [host] + [h for h in (s.value("recent_hosts", [], list) or []) if h != host]
         s.setValue("recent_hosts", recent[:8])
+        # So a scan that finds several TVs can name them: the hardware seen at this address last time.
+        s.setValue(f"known_tv/{host.replace('.', '_')}", hardware_name(info))
         BUS.connection.emit(True, info)
 
     def failed(self, msg):

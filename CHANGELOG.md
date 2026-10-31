@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.7
+
+Connect: when Find TVs (or the search at start) finds several TVs or boxes with debugging on, a list asks which one, each named by the hardware it had the last time this PC connected (and its network name), the last one used first. Picking another TV while one is connected switches to it.
+
 ## 1.5.6
 
 The launcher speaks the TV's language everywhere: all of its own text in Greek (it ships no Greek of its own; "Remove from Home" was English), and CleanYourTV's additions (Live TV row, hold-OK menu, Bluetooth and Wi-Fi menus) in all 30 languages the launcher has. Android picks them by the system language.
