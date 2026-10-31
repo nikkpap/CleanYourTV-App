@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0
+
+Pair a TV: a **Fix Windows Firewall for adb** button (one administrator prompt) removes Windows Firewall rules that block adb.exe, allows adb in and out on every network type plus the TVs' mDNS, and marks the TV's network Private if Windows had it as Public. A failed pairing now says what on the PC may be in the way (blocking rules, a Public network, another antivirus), first checks that the TV's pairing port answers, and no longer retries with a code the TV may have dropped. The whole message is shown.
+
 ## 1.5.9
 
 Pair a TV: fixes "protocol fault (couldn't read status message)". An adb older than platform-tools 34 is replaced by the newest, another program's adb server is stopped first, the pairing port is the one the TV announces at that moment (reopening the TV's pairing screen gives a new port and code), and a protocol fault is retried once with a fresh adb. If it still fails, the message says what to do next.

@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.5.9.pyw            normal mode
-    python CleanYourTV_v1.5.9.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.0.pyw            normal mode
+    python CleanYourTV_v1.6.0.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,11 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.0  Pair a TV: a "Fix Windows Firewall for adb" button (one administrator prompt) removes Windows Firewall rules
+         that block adb.exe, allows adb in and out on every network type plus the TVs' mDNS, and marks the TV's
+         network Private if Windows had it as Public. A failed pairing now says what on the PC may be in the way
+         (blocking rules, a Public network, another antivirus), checks the TV's pairing port answers first, and no
+         longer retries with a code the TV may have already dropped. The whole message is shown.
   1.5.9  Pair a TV: fixes "protocol fault (couldn't read status message)". An adb older than platform-tools 34 is
          replaced by the newest, another program's adb server is stopped first, the pairing port is the one the TV
          announces at that moment (reopening the TV's pairing screen gives a new port and code), and a protocol fault
@@ -143,7 +148,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.5.9"
+APP_VERSION = "1.6.0"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2553,6 +2558,99 @@ TS_STEPS = (
 )
 
 
+def _ps(script, timeout=60):
+    """Runs a PowerShell script (as this user) and returns its output."""
+    try:
+        p = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                           capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW,
+                           encoding="utf-8", errors="replace")
+        return (p.stdout + p.stderr).strip()
+    except Exception as e:   # noqa: BLE001 - no PowerShell, a timeout: no diagnosis
+        return f"{type(e).__name__}: {e}"
+
+
+def _ps_quote(text):
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def adb_paths(*extra):
+    """Every adb.exe this app may use, so a firewall rule covers each of them."""
+    out = []
+    for a in (*extra, find_adb(), str(ADB_HOME / "adb.exe")):
+        if a and Path(a).is_file() and str(Path(a).resolve()) not in out:
+            out.append(str(Path(a).resolve()))
+    return out
+
+
+def network_check(ip):
+    """What on this PC may stand between adb and the TV: the network marked Public, Windows Firewall rules that
+    block adb.exe (Windows adds them when its question about adb is closed with Cancel), another antivirus."""
+    found = {"public": False, "blocks": 0, "av": []}
+    if os.name != "nt" or DEMO:
+        return found
+    out = _ps(
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$i=(Find-NetRoute -RemoteIPAddress {_ps_quote(ip)} | Select-Object -First 1).InterfaceIndex;"
+        "$c=(Get-NetConnectionProfile -InterfaceIndex $i).NetworkCategory;"
+        "$b=@(Get-NetFirewallApplicationFilter | Where-Object {$_.Program -like '*\\adb.exe'} | Get-NetFirewallRule |"
+        " Where-Object {$_.Action -eq 'Block' -and $_.Enabled -eq 'True'}).Count;"
+        "$a=(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct).displayName -join '|';"
+        "Write-Output \"CAT=$c\";Write-Output \"BLOCK=$b\";Write-Output \"AV=$a\"", 60)
+    for line in out.splitlines():
+        k, _, v = line.partition("=")
+        if k == "CAT":
+            found["public"] = v.strip().lower() == "public"
+        elif k == "BLOCK" and v.strip().isdigit():
+            found["blocks"] = int(v)
+        elif k == "AV":
+            found["av"] = [a for a in v.split("|") if a.strip() and "defender" not in a.lower()]
+    return found
+
+
+def fix_firewall(ip, adbs):
+    """One administrator prompt: removes Windows Firewall rules that block adb.exe, allows every adb.exe this app uses
+    (in and out, every network type) and the TVs' mDNS announcements, and marks the TV's network Private if Windows
+    has it as Public. Returns what was done."""
+    if os.name != "nt":
+        return "Only needed on Windows."
+    if DEMO:
+        time.sleep(0.5)
+        return "Allowed adb.exe (demo)."
+    APPDATA.mkdir(parents=True, exist_ok=True)
+    res = APPDATA / "firewall-fix.txt"
+    res.unlink(missing_ok=True)
+    ps1 = APPDATA / "firewall-fix.ps1"
+    progs = ",".join(_ps_quote(a) for a in adbs) or "@()"
+    ps1.write_text(
+        "$ErrorActionPreference='Continue'\n"
+        f"$res={_ps_quote(res)}\n$progs=@({progs})\n$o=@()\n"
+        "$bad=Get-NetFirewallApplicationFilter | Where-Object {$_.Program -like '*\\adb.exe'} | Get-NetFirewallRule |"
+        " Where-Object {$_.Action -eq 'Block'}\n"
+        "if($bad){ $n=@($bad).Count; $bad | Remove-NetFirewallRule; $o+=\"Removed $n rule(s) that blocked adb.exe\" }\n"
+        "Get-NetFirewallRule -DisplayName 'CleanYourTV adb*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule\n"
+        "foreach($p in $progs){\n"
+        " New-NetFirewallRule -DisplayName 'CleanYourTV adb (in)' -Direction Inbound -Program $p -Action Allow"
+        " -Profile Any | Out-Null\n"
+        " New-NetFirewallRule -DisplayName 'CleanYourTV adb (out)' -Direction Outbound -Program $p -Action Allow"
+        " -Profile Any | Out-Null\n"
+        " $o+=\"Allowed $p\" }\n"
+        "New-NetFirewallRule -DisplayName 'CleanYourTV adb mDNS' -Direction Inbound -Protocol UDP -LocalPort 5353"
+        " -Action Allow -Profile Any | Out-Null\n"
+        f"$i=(Find-NetRoute -RemoteIPAddress {_ps_quote(ip)} -ErrorAction SilentlyContinue | Select-Object -First 1)"
+        ".InterfaceIndex\n"
+        "if($i){ $c=Get-NetConnectionProfile -InterfaceIndex $i -ErrorAction SilentlyContinue\n"
+        " if($c -and $c.NetworkCategory -eq 'Public'){ Set-NetConnectionProfile -InterfaceIndex $i"
+        " -NetworkCategory Private; $o+=\"Network '$($c.Name)' set from Public to Private\" } }\n"
+        "$o+='OK'\n$o | Out-File -Encoding utf8 $res\n", encoding="utf-8-sig")   # BOM: Windows PowerShell 5 then
+    # reads a Greek user name in the path right
+    out = _ps("Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "
+              f"@('-NoProfile','-ExecutionPolicy','Bypass','-File','\"{ps1}\"')", 180)
+    if not res.is_file():
+        raise RuntimeError("Windows did not run it as administrator (the prompt was closed?). " + out[-200:])
+    lines = [x.strip().lstrip("﻿") for x in res.read_text(encoding="utf-8", errors="replace").splitlines()]
+    return "<br>".join(x for x in lines if x and x != "OK") or "Already allowed."
+
+
 class PairDialog(Dialog):
     """Pairs a TV that offers only Wireless debugging: it finds the TV's pairing screen by itself, the person types the
     6-digit code, and the TV's port 5555 is opened so the app connects as to any other TV."""
@@ -2575,6 +2673,12 @@ class PairDialog(Dialog):
         self.code.setMaxLength(6)
         self.code.setFixedWidth(150)
         self.lay.addWidget(hbox(label("Address", "Muted"), self.addr, label("Code", "Muted"), self.code))
+        self.fw = button("Fix Windows Firewall for adb", None, "shield",
+                         "One administrator prompt: allows adb.exe, removes rules that block it, and marks the "
+                         "TV's network Private if Windows has it as Public.")
+        self.fw.clicked.connect(self.fix_fw)
+        self.fw.setVisible(os.name == "nt" or DEMO)
+        self.lay.addWidget(hbox(self.fw, stretch_at=1))
         self.go = self.buttons("Pair & connect", "Cancel")
         self.go.setEnabled(False)
         self.go.clicked.disconnect()
@@ -2642,27 +2746,40 @@ class PairDialog(Dialog):
                     now = [f"{i}:{p}" for i, p, _n in adb_mdns(self.adb)["pairing"] if i == ip]
                     if now:
                         target = now[-1]
-                out = ""
-                for attempt in range(2):
-                    rc, out = _adb_run(self.adb, ["pair", target, code], 40)
-                    log(f"$ adb pair {target} ******\n{out}", "cmd")
-                    if "success" in out.lower():
-                        break
-                    if "protocol fault" in out.lower() and attempt == 0:
-                        # Usually an old adb, or another program's adb server: the newest adb, a fresh server, once more.
-                        self.adb = ensure_adb(fresh=True)
-                        _adb_run(self.adb, ["kill-server"], 15)
-                        _adb_run(self.adb, ["start-server"], 30)
-                        continue
-                    break
+                tip, tport = target.rsplit(":", 1)
+                if not _port_open(tip, int(tport), 3):
+                    raise RuntimeError(
+                        f"nothing answers at <b>{target}</b>: the TV's pairing screen is closed, or it now has another "
+                        "port. On the TV open <b>Pair device with pairing code</b> again and leave it open; this "
+                        "window picks the new port up by itself.")
+                _rc, ver = _adb_run(self.adb, ["version"], 15)
+                log(f"$ adb version\n{ver}", "cmd")
+                # One try per code: after a failed try the TV may no longer accept that code.
+                _rc, out = _adb_run(self.adb, ["pair", target, code], 40)
+                log(f"$ adb pair {target} ******\n{out}", "cmd")
                 if "success" not in out.lower():
                     low = out.lower()
-                    if "protocol fault" in low or "wrong password" in low or "failed" in low:
+                    if "protocol fault" in low or "wrong password" in low or "reset" in low or "failed" in low:
+                        # A clean adb server for the next try (another program's adb may have been in the way).
+                        _adb_run(self.adb, ["kill-server"], 15)
+                        _adb_run(self.adb, ["start-server"], 30)
+                        chk = network_check(tip)
+                        why = []
+                        if chk["blocks"]:
+                            why.append(f"Windows Firewall has <b>{chk['blocks']} rule(s) that block adb.exe</b>")
+                        if chk["public"]:
+                            why.append("Windows has this network as <b>Public</b>, where it lets less through")
+                        if chk["av"]:
+                            why.append("<b>" + ", ".join(chk["av"]) + "</b> also guards the network: pause its "
+                                       "firewall / network protection for a minute, or allow adb.exe in it")
+                        hint = ("<br><br><b>Found on this PC:</b> " + "; ".join(why) + ". Press <b>Fix Windows "
+                                "Firewall for adb</b> below, then try again." if why else
+                                "<br><br>Windows Firewall shows nothing blocking adb.")
                         raise RuntimeError(
-                            (out or "pairing failed") + "<br><br>On the TV, go back one screen and open <b>Pair device "
-                            "with pairing code</b> again: it shows a <b>new code and port</b>, and this window picks the "
-                            "new port up by itself. Type the new code. If it fails again, allow <b>adb.exe</b> in Windows "
-                            "Firewall (Private networks) and check this PC is on the same network as the TV, with no VPN.")
+                            (out or "pairing failed") + hint + "<br><br>Then on the TV go back one screen and open "
+                            "<b>Pair device with pairing code</b> again: it shows a <b>new code</b> (one try per code), "
+                            "and this window picks the new port up by itself. Type the code within a few seconds, "
+                            "while the TV still shows it.")
                     raise RuntimeError(out or "pairing failed")
             # The connect port is announced once paired; the pairing screen's port is a different one.
             for _ in range(12):
@@ -2681,12 +2798,33 @@ class PairDialog(Dialog):
 
         def failed(m):
             self.msg.set(f"Pairing failed: {m}", "bad")
+            self.adjustSize()
             self.code.clear()
             self.typed = False
             self._ready()
             self.timer.start(2500)
 
         run_job(work, pool=NET_POOL, on_result=done, on_error=failed)
+
+    def fix_fw(self):
+        ip = self.addr.text().strip().split(":")[0] or self.ip_hint or "192.168.1.1"
+        self.fw.setEnabled(False)
+        self.msg.set("Windows asks for administrator rights: press <b>Yes</b>.", "info")
+        self.adjustSize()
+
+        def ok(text):
+            self.fw.setEnabled(True)
+            log(f"Firewall fix: {text}", "ok")
+            self.msg.set(f"Done. {text}<br><br>Now on the TV open <b>Pair device with pairing code</b> again and type "
+                         "the new code.", "ok")
+            self.adjustSize()
+
+        def bad(m):
+            self.fw.setEnabled(True)
+            self.msg.set(f"Firewall fix failed: {m}", "bad")
+            self.adjustSize()
+
+        run_job(fix_firewall, ip, adb_paths(self.adb), pool=NET_POOL, on_result=ok, on_error=bad)
 
     def done(self, r):
         self.timer.stop()
