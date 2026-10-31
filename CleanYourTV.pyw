@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.6.1.pyw            normal mode
-    python CleanYourTV_v1.6.1.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.2.pyw            normal mode
+    python CleanYourTV_v1.6.2.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.2  Pair a TV: tells apart a TV that is invisible on this PC's network (Destination host unreachable: Wi-Fi
+         isolation, guest Wi-Fi, an extender or mesh) from other reasons, and says what to change.
   1.6.1  Pair a TV: when this PC cannot reach the TV's pairing port it says why (a VPN such as a Tailscale exit node
          or subnets carrying the traffic, the PC on another network, the router keeping Wi-Fi devices apart, the
          port closed, or security software dropping it), and a Copy debug report button puts adb, mDNS, ping, port,
@@ -152,7 +154,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6.2"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2670,7 +2672,11 @@ def reach_check(ip, port):
     if tcp == "open":
         return why
     route, mine = _route_to(ip)
-    pong, _out = _ping(ip)
+    pong, pout = _ping(ip)
+    # "Reply from <this PC>: Destination host unreachable": the TV did not even answer "who has this address" (ARP)
+    # on this PC's network, yet its announcements (multicast) get through: it sits behind a Wi-Fi that keeps devices
+    # apart, or on another Wi-Fi of the router, an extender or a mesh with isolation.
+    no_arp = bool(re.search(r"destination host unreachable", pout or "", re.I))
     vpn = VPN_RE.search(route)
     if vpn:
         why.append(f"Windows sends to the TV through <b>{html.escape(route)}</b>, not your home network. Turn it off "
@@ -2682,6 +2688,12 @@ def reach_check(ip, port):
     if tcp == "refused":
         why.append("the TV answered, but nothing listens on that port: its pairing screen closed or moved to another "
                    "port. Open <b>Pair device with pairing code</b> again and keep it on screen.")
+    elif no_arp:
+        why.append(f"no device at <b>{html.escape(ip)}</b> answers on this PC's network ({html.escape(route or 'LAN')}),"
+                   " although the TV's announcements arrive. The router (or a Wi-Fi extender / mesh) keeps the TV's "
+                   "Wi-Fi apart from this PC: on the TV check the Wi-Fi name is the main one (not <b>Guest</b> or an "
+                   "extender); in the router turn off <b>AP / client / wireless isolation</b> for that Wi-Fi (2.4 and "
+                   "5 GHz each have it); or connect this PC to the same Wi-Fi as the TV.")
     elif pong is False:
         why.append("the TV does not even answer a ping from this PC. Most often the router keeps Wi-Fi devices apart "
                    "(<b>AP / client isolation</b>, or a <b>guest</b> Wi-Fi): put the PC and the TV on the same main "

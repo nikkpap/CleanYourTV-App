@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.2
+
+Pair a TV: tells apart a TV that is invisible on this PC's network ("Destination host unreachable": Wi-Fi isolation, a guest Wi-Fi, an extender or mesh) from other reasons, and says what to change.
+
 ## 1.6.1
 
 Pair a TV: when this PC cannot reach the TV's pairing port it says why (a VPN such as a Tailscale exit node or subnets carrying the traffic, the PC on another network, the router keeping Wi-Fi devices apart, the port closed, or security software dropping it). A **Copy debug report** button puts adb, mDNS, ping, port, route, network, firewall and antivirus details in the clipboard (and pair-debug.txt) to paste to whoever helps.
