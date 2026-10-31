@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.3
+
+Pair a TV debug report: adds this PC's Wi-Fi (network name, band, channel, signal) and the devices it sees on the network (arp), to tell Wi-Fi isolation apart from a TV that changed address.
+
 ## 1.6.2
 
 Pair a TV: tells apart a TV that is invisible on this PC's network ("Destination host unreachable": Wi-Fi isolation, a guest Wi-Fi, an extender or mesh) from other reasons, and says what to change.

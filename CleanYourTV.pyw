@@ -2,8 +2,8 @@
 """CleanYourTV - a desktop app for debloating an Android TV over network ADB.
 
 Double-click this file on Windows (it opens without a console window), or run
-    python CleanYourTV_v1.6.2.pyw            normal mode
-    python CleanYourTV_v1.6.2.pyw --demo     a simulated TV, to try the app without one
+    python CleanYourTV_v1.6.3.pyw            normal mode
+    python CleanYourTV_v1.6.3.pyw --demo     a simulated TV, to try the app without one
 Each release is named CleanYourTV_v<version>.pyw; the shortcuts follow the newest file you start.
 
 It is a front end for the tools in this repository, not a replacement for them:
@@ -19,6 +19,8 @@ Needs Python 3.9+ with PyQt6 and the packages in tools/requirements.txt. When th
 app offers to install them.
 
 Changes
+  1.6.3  Pair a TV debug report: adds the PC's Wi-Fi (network name, band, channel, signal) and the devices this PC
+         sees on the network (arp), to tell Wi-Fi isolation apart from a TV that changed address.
   1.6.2  Pair a TV: tells apart a TV that is invisible on this PC's network (Destination host unreachable: Wi-Fi
          isolation, guest Wi-Fi, an extender or mesh) from other reasons, and says what to change.
   1.6.1  Pair a TV: when this PC cannot reach the TV's pairing port it says why (a VPN such as a Tailscale exit node
@@ -154,7 +156,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "CleanYourTV"
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.6.3"
 HERE = Path(__file__).resolve().parent
 DEMO = "--demo" in sys.argv
 REPO_ZIP = "https://github.com/Gathin23/cleanyourtv/archive/refs/heads/main.zip"
@@ -2747,6 +2749,12 @@ def pair_debug_report(adb, addr, last_pair=""):
             "Get-NetFirewallApplicationFilter | Where-Object {$_.Program -like '*adb.exe'} | ForEach-Object {"
             " $r = $_ | Get-NetFirewallRule; '{0} | {1} | {2} | {3} | {4}' -f $r.DisplayName,$r.Direction,$r.Action,"
             "$r.Enabled,$_.Program }", 90))
+        sec("wi-fi", lambda: _ps("netsh wlan show interfaces | Select-String -Pattern "
+                                 "'^\\s*(Name|State|SSID|BSSID|Band|Channel|Radio type|Signal)\\s*:' | Out-String"))
+        if ip:
+            sec("arp (who answers for the TV's address)",
+                lambda: _ps(f"arp -a | Select-String -SimpleMatch {_ps_quote(ip)} | Out-String") or "no entry")
+            sec("all devices this PC sees (arp)", lambda: _ps("arp -a | Select-String -Pattern 'dynamic' | Out-String"))
         sec("antivirus", lambda: _ps("(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct)"
                              ".displayName -join ', '"))
         sec("firewall products", lambda: _ps("(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName FirewallProduct)"
